@@ -333,13 +333,18 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      # Trusted publishing needs npm 11.5.1 or newer, which is ahead of the
+      # version bundled with Node 22.
+      - name: Update npm
+        run: npm install -g npm@latest
+
       - run: npm ci
 
       - run: npm run build
 
+      # No token: the id-token permission above lets npm verify this workflow
+      # through OIDC, and provenance is attested from the same identity.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   cleanup:
     name: Delete the dev branch
