@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Release mode"
+        required: true
+        default: Everything
+        type: choice
+        options:
+          - Everything
+          - Overwrite release
+          - Dry run
+          - Skip npm
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  prep:
+    name: Resolve version and validate notes
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      release_tag: ${{ steps.info.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Resolve version
+        id: info
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=release-$VERSION-tag" >> "$GITHUB_OUTPUT"
+
+      # Fails the run before anything is published if a section is missing or
+      # empty, rather than producing a half-written release body.
+      - name: Validate release notes
+        run: |
+          node scripts/generate-release-body.cjs \
+            --version "${{ steps.info.outputs.version }}" \
+            --notes RELEASE_NOTES.md > /dev/null
+
+  verify:
+    name: Verify on ${{ matrix.os }}
+    needs: [prep]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run verify
+
+  build-binaries:
+    name: Build ${{ matrix.asset }}
+    needs: [prep, verify]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: termix_windows_x64.exe
+          - os: ubuntu-latest
+            asset: termix_linux_x64
+          - os: ubuntu-24.04-arm
+            asset: termix_linux_arm64
+          - os: macos-13
+            asset: termix_macos_x64
+          - os: macos-latest
+            asset: termix_macos_arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Node's SEA embeds the runtime it was built with and cannot
+      # cross-compile, so each target builds on its own runner.
+      - name: Build the standalone binary
+        run: npm run build:binary -- ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: release/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish
+    needs: [prep, verify, build-binaries]
+    if: ${{ inputs.mode != 'Dry run' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: List the collected assets
+        run: ls -la release
+
+      - name: Generate the release body
+        run: |
+          node scripts/generate-release-body.cjs \
+            --version "${{ needs.prep.outputs.version }}" \
+            --notes RELEASE_NOTES.md > RELEASE_BODY.md
+          cat RELEASE_BODY.md
+
+      - name: Clear existing assets (overwrite mode)
+        if: ${{ inputs.mode == 'Overwrite release' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ needs.prep.outputs.release_tag }}"
+          if ! gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "Overwrite release: no existing release $TAG to overwrite."
+            exit 1
+          fi
+          gh release view "$TAG" --repo ${{ github.repository }} --json assets -q '.assets[].name' | while read -r ASSET; do
+            [ -n "$ASSET" ] && gh release delete-asset "$TAG" "$ASSET" --repo ${{ github.repository }} --yes || true
+          done
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ needs.prep.outputs.release_tag }}"
+          TITLE="release-${{ needs.prep.outputs.version }}"
+          if gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo ${{ github.repository }} \
+              --title "$TITLE" --notes-file RELEASE_BODY.md
+          else
+            gh release create "$TAG" --repo ${{ github.repository }} \
+              --title "$TITLE" --notes-file RELEASE_BODY.md --target "$GITHUB_SHA"
+          fi
+
+      - name: Upload the binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ needs.prep.outputs.release_tag }}" \
+            release/* --repo ${{ github.repository }} --clobber
+
+      - name: Publish to npm
+        if: ${{ inputs.mode != 'Skip npm' }}
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
