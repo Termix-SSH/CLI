@@ -12,6 +12,7 @@ node_modules/
 # Build output
 dist/
 build/
+release/
 out/
 lib/
 *.tsbuildinfo

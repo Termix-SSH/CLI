@@ -5,16 +5,17 @@
     "types": ["node"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "rootDir": "./src",
     "outDir": "./dist",
     "strict": true,
+    "noUncheckedIndexedAccess": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": false,
+    "noEmit": true,
     "sourceMap": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules", "src/**/*.test.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "*.config.ts"],
+  "exclude": ["dist", "node_modules"]
 }
