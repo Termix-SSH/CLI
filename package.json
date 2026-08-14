@@ -1,30 +1,78 @@
 {
   "name": "termix-cli",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Command-line interface for Termix. Manage SSH hosts, run commands, transfer files and open terminals from your shell.",
+  "license": "Apache-2.0",
   "type": "module",
-  "description": "Command-line interface for Termix — a thin wrapper around the Termix HTTP API, usable by humans, scripts and AI agents.",
   "bin": {
     "termix": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Termix-SSH/CLI.git"
+  },
+  "homepage": "https://github.com/Termix-SSH/CLI#readme",
+  "bugs": {
+    "url": "https://github.com/Termix-SSH/Support/issues"
+  },
+  "keywords": [
+    "termix",
+    "ssh",
+    "sftp",
+    "cli",
+    "terminal",
+    "devops"
+  ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=20.11.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json && node dist/index.js",
+    "build": "tsup",
+    "dev": "tsup --watch",
     "start": "node dist/index.js",
+    "cli": "node scripts/run.mjs",
     "type-check": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:binary": "npm run build && node scripts/build-binary.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "link:local": "npm run build && npm link",
+    "unlink:local": "npm unlink -g termix-cli",
+    "verify": "npm run format:check && npm run lint && npm run type-check && npm test && npm run smoke",
+    "prepare": "husky || true",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "axios": "^1.18.0",
+    "axios": "^1.19.0",
     "commander": "^14.0.0",
+    "ws": "^8.21.3",
     "zod": "^3.25.76"
   },
+  "optionalDependencies": {
+    "keytar": "^7.9.0"
+  },
   "devDependencies": {
+    "@eslint/js": "^9.39.0",
     "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
+    "eslint": "^9.39.0",
+    "husky": "^9.1.7",
+    "prettier": "^3.9.6",
+    "tsup": "^8.5.1",
     "typescript": "~6.0.3",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^4.1.9"
   }
 }
