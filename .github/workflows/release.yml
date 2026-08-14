@@ -185,13 +185,17 @@ jobs:
           echo "build_ref=$MAIN_SHA" >> "$GITHUB_OUTPUT"
 
   verify:
-    name: Verify on ${{ matrix.os }}
+    name: Verify on ${{ matrix.name }}
     needs: [prep, merge-to-main]
     if: ${{ always() && needs.merge-to-main.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-4vcpu-windows-2025]
+        include:
+          - name: Linux
+            os: blacksmith-2vcpu-ubuntu-2404
+          - name: Windows
+            os: blacksmith-4vcpu-windows-2025
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

@@ -12,11 +12,15 @@ concurrency:
 
 jobs:
   check:
-    name: Lint, type-check and test
+    name: Lint, type-check and test on ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-4vcpu-windows-2025]
+        include:
+          - name: Linux
+            os: blacksmith-2vcpu-ubuntu-2404
+          - name: Windows
+            os: blacksmith-4vcpu-windows-2025
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -43,11 +47,15 @@ jobs:
         run: node dist/index.js --version
 
   package:
-    name: Verify the published package
+    name: Verify the published package on ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-4vcpu-windows-2025]
+        include:
+          - name: Linux
+            os: blacksmith-2vcpu-ubuntu-2404
+          - name: Windows
+            os: blacksmith-4vcpu-windows-2025
     runs-on: ${{ matrix.os }}
     needs: check
 
