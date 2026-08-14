@@ -102,9 +102,18 @@ process.stdout.write(`\nBuilt ${path.relative(root, target)} (${sizeMb} MB)\n`);
 
 // Prove the binary actually runs before it is uploaded as a release asset.
 process.stdout.write("Verifying...\n");
-const reported = execFileSync(target, ["--version"], {
-  encoding: "utf8",
-}).trim();
+let reported;
+try {
+  reported = execFileSync(target, ["--version"], { encoding: "utf8" }).trim();
+} catch (error) {
+  // A binary for another architecture cannot run here. On macOS that is
+  // normally handled by Rosetta, so say so rather than reporting a bad build.
+  process.stderr.write(
+    `Could not run ${outputName} on this machine (${process.platform}/${process.arch}): ` +
+      `${error.message}\n`,
+  );
+  process.exit(1);
+}
 const expected = JSON.parse(
   fs.readFileSync(path.join(root, "package.json"), "utf8"),
 ).version;

@@ -225,8 +225,9 @@ jobs:
             asset: termix_linux_x64
           - os: ubuntu-24.04-arm
             asset: termix_linux_arm64
-          - os: macos-13
+          - os: blacksmith-6vcpu-macos-latest
             asset: termix_macos_x64
+            arch: x64
           - os: blacksmith-6vcpu-macos-latest
             asset: termix_macos_arm64
     runs-on: ${{ matrix.os }}
@@ -238,6 +239,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          architecture: ${{ matrix.arch }}
           cache: npm
 
       - run: npm ci
