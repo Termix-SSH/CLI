@@ -92,6 +92,9 @@ export function registerApiKeyCommands(program: Command): void {
   keys
     .command("revoke <keyId>")
     .description("Revoke an API key.")
+    // Key ids are nanoids, which often start with "-" and would otherwise be
+    // parsed as an unknown option.
+    .allowUnknownOption()
     .action(async function (this: Command, keyId: string) {
       await run(async () => {
         const { client } = await createContext(this);

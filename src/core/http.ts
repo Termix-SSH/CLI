@@ -180,11 +180,46 @@ function toApiError(
   return new TermixApiError(message, status, path, code);
 }
 
+interface ConnectionLogEntry {
+  type?: string;
+  stage?: string;
+  message?: string;
+}
+
+/**
+ * Pull the most useful message out of an error body.
+ *
+ * The SSH-backed services answer with `{status, message, connectionLogs}`
+ * rather than `{error}`, and the connection log holds the real reason a
+ * connection failed. Without it the user sees a bare HTTP 500 for something
+ * as actionable as an unverified host key.
+ */
 function extractError(data: unknown): { error?: string; code?: string } {
   if (!data || typeof data !== "object") return {};
   const record = data as Record<string, unknown>;
+
+  const primary =
+    typeof record.error === "string"
+      ? record.error
+      : typeof record.message === "string"
+        ? record.message
+        : undefined;
+
+  let detail: string | undefined;
+  if (Array.isArray(record.connectionLogs)) {
+    const failure = (record.connectionLogs as ConnectionLogEntry[])
+      .filter((entry) => entry?.type === "error" && entry.message)
+      .pop();
+    // Skip a log line that just repeats the summary.
+    if (failure?.message && failure.message !== primary) {
+      detail = failure.message;
+    }
+  }
+
+  const error = [primary, detail].filter(Boolean).join(" - ") || undefined;
+
   return {
-    error: typeof record.error === "string" ? record.error : undefined,
+    error,
     code: typeof record.code === "string" ? record.code : undefined,
   };
 }

@@ -128,29 +128,36 @@ export function registerHostCommands(program: Command): void {
       if (!opts.ip || !opts.username) {
         throw new UsageError("`hosts create` requires --ip and --username.");
       }
+
+      if (opts.port === undefined) opts.port = "22";
+
+      // Build first, then check: secrets can arrive through the environment
+      // rather than a flag, and only the payload knows what actually resolved.
+      const payload = buildHostPayload(opts);
+
       // Require an auth method up front: without one the backend returns an
       // opaque 500, so fail here with something actionable instead.
       if (
-        opts.password === undefined &&
-        opts.keyFile === undefined &&
-        opts.credentialId === undefined
+        payload.password === undefined &&
+        payload.key === undefined &&
+        payload.credentialId === undefined
       ) {
         throw new UsageError(
-          "`hosts create` needs an auth method: pass --password, --key-file or --credential-id.",
+          "`hosts create` needs an auth method: pass --password, --key-file or --credential-id " +
+            "(or set TERMIX_HOST_PASSWORD).",
         );
       }
 
-      if (opts.port === undefined) opts.port = "22";
-      if (opts.authType === undefined) {
-        if (opts.password !== undefined) opts.authType = "password";
-        else if (opts.keyFile !== undefined) opts.authType = "key";
+      if (payload.authType === undefined) {
+        if (payload.password !== undefined) payload.authType = "password";
+        else if (payload.key !== undefined) payload.authType = "key";
       }
 
       const { client } = await createContext(this);
       const created = await client.request<HostRow>({
         method: "POST",
         path: "/host/db/host",
-        data: buildHostPayload(opts),
+        data: payload,
       });
       printResult(`Created host ${created.id}.`, {
         id: created.id,

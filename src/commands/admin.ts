@@ -14,11 +14,13 @@ const AUDIT_COLUMNS: Column<Row>[] = [
 ];
 
 const USER_COLUMNS: Column<Row>[] = [
-  { header: "id", value: (u) => u.id },
+  // The users endpoint returns userId rather than id.
+  { header: "id", value: (u) => u.userId ?? u.id },
   { header: "username", value: (u) => u.username },
   { header: "admin", value: (u) => u.is_admin ?? u.isAdmin },
   { header: "oidc", value: (u) => u.is_oidc ?? u.isOidc },
   { header: "totp", value: (u) => u.totp_enabled ?? u.totpEnabled },
+  { header: "unlocked", value: (u) => u.data_unlocked },
 ];
 
 /**
@@ -66,7 +68,9 @@ export function registerAdminCommands(program: Command): void {
           method: "GET",
           path: "/users/list",
         });
-        printList(toRows(data, "users"), USER_COLUMNS);
+        printList(toRows(data, "users"), USER_COLUMNS, {
+          quietField: "userId",
+        });
       });
     });
 }

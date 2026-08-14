@@ -45,6 +45,8 @@ export function registerSessionCommands(program: Command): void {
   sessions
     .command("revoke <sessionId>")
     .description("Revoke a single session.")
+    // Session ids are nanoids, which often start with "-".
+    .allowUnknownOption()
     .action(async function (this: Command, sessionId: string) {
       await run(async () => {
         const { client } = await createContext(this);

@@ -13,10 +13,23 @@ type Row = Record<string, unknown>;
 
 const STATUS_COLUMNS: Column<Row>[] = [
   { header: "id", value: (r) => r.id ?? r.hostId, align: "right" },
+  { header: "name", value: (r) => r.name },
   { header: "status", value: (r) => r.status },
-  { header: "reachable", value: (r) => r.online ?? r.reachable },
   { header: "checked", value: (r) => r.lastChecked ?? r.updatedAt },
 ];
+
+/**
+ * The status endpoint returns a map keyed by host id rather than an array,
+ * so turn it into rows. An array is still accepted in case that changes.
+ */
+export function toStatusRows(data: unknown): Row[] {
+  if (Array.isArray(data)) return data as Row[];
+  if (!data || typeof data !== "object") return [];
+  return Object.entries(data as Record<string, Row>).map(([id, value]) => ({
+    id,
+    ...value,
+  }));
+}
 
 export function registerMiscCommands(program: Command): void {
   program
@@ -70,11 +83,29 @@ export function registerMiscCommands(program: Command): void {
           service: "metrics",
         });
 
-        if (Array.isArray(data)) {
-          printList(data, STATUS_COLUMNS);
-        } else {
-          printRecord(data);
+        // A single host returns one record.
+        if (hostId) {
+          printRecord({ id: Number(hostId), ...(data as Row) });
+          return;
         }
+
+        // Listing every host returns a map keyed by host id, not an array.
+        const rows = toStatusRows(data);
+
+        // The map carries only ids, so pair them with names to make the table
+        // readable. A failure here must not lose the status output.
+        const names = await client
+          .request<Array<{ id?: number; name?: string }>>({
+            method: "GET",
+            path: "/host/db/host",
+          })
+          .then((hosts) => new Map(hosts.map((h) => [h.id, h.name])))
+          .catch(() => new Map<number | undefined, string | undefined>());
+
+        printList(
+          rows.map((row) => ({ ...row, name: names.get(Number(row.id)) })),
+          STATUS_COLUMNS,
+        );
       });
     });
 }

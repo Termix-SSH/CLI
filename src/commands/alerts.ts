@@ -16,6 +16,24 @@ const ALERT_COLUMNS: Column<AlertRow>[] = [
   { header: "created", value: (a) => a.createdAt },
 ];
 
+/**
+ * The alerts endpoint answers with an envelope, and has been seen wrapped in
+ * an array as well, so unwrap either shape down to the alert records.
+ */
+export function toAlertRows(data: unknown): AlertRow[] {
+  const unwrapped = Array.isArray(data) ? data[0] : data;
+  if (!unwrapped || typeof unwrapped !== "object") return [];
+
+  const alerts = (unwrapped as { alerts?: unknown }).alerts;
+  if (Array.isArray(alerts)) return alerts as AlertRow[];
+
+  // A bare array of alerts, with no envelope.
+  if (Array.isArray(data) && data.every((d) => d && !("alerts" in d))) {
+    return data as AlertRow[];
+  }
+  return [];
+}
+
 export function registerAlertCommands(program: Command): void {
   const alerts = program
     .command("alerts")
@@ -27,17 +45,19 @@ export function registerAlertCommands(program: Command): void {
     .action(async function (this: Command) {
       await run(async () => {
         const { client } = await createContext(this);
-        const data = await client.request<AlertRow[] | AlertRow>({
+        const data = await client.request<unknown>({
           method: "GET",
           path: "/alerts",
         });
-        printList(Array.isArray(data) ? data : [data], ALERT_COLUMNS);
+        printList(toAlertRows(data), ALERT_COLUMNS);
       });
     });
 
   alerts
     .command("dismiss <alertId>")
     .description("Dismiss an alert.")
+    // Alert ids can start with "-", which would parse as an unknown option.
+    .allowUnknownOption()
     .action(async function (this: Command, alertId: string) {
       await run(async () => {
         const { client } = await createContext(this);
@@ -53,6 +73,7 @@ export function registerAlertCommands(program: Command): void {
   alerts
     .command("undismiss <alertId>")
     .description("Restore a previously dismissed alert.")
+    .allowUnknownOption()
     .action(async function (this: Command, alertId: string) {
       await run(async () => {
         const { client } = await createContext(this);

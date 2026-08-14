@@ -66,13 +66,16 @@ export function printList<T extends Record<string, unknown>>(
   columns: Column<T>[],
   opts: { quietField?: keyof T; jsonWrapper?: (rows: T[]) => unknown } = {},
 ): void {
-  if (options.json) {
-    printJson(opts.jsonWrapper ? opts.jsonWrapper(rows) : rows);
-    return;
-  }
+  // quiet is checked first: it is always an explicit flag, while json is
+  // usually inferred from stdout not being a terminal. Checking json first
+  // would make --quiet do nothing in a pipe, which is where it is for.
   if (options.quiet) {
     const field = opts.quietField ?? ("id" as keyof T);
     for (const row of rows) process.stdout.write(`${String(row[field])}\n`);
+    return;
+  }
+  if (options.json) {
+    printJson(opts.jsonWrapper ? opts.jsonWrapper(rows) : rows);
     return;
   }
   if (rows.length === 0) {
@@ -87,13 +90,13 @@ export function printRecord(
   record: Record<string, unknown>,
   opts: { quietField?: string } = {},
 ): void {
-  if (options.json) {
-    printJson(record);
-    return;
-  }
   if (options.quiet) {
     const field = opts.quietField ?? "id";
     process.stdout.write(`${String(record[field])}\n`);
+    return;
+  }
+  if (options.json) {
+    printJson(record);
     return;
   }
 
@@ -113,12 +116,12 @@ export function printResult(
   message: string,
   data: Record<string, unknown> = {},
 ): void {
-  if (options.json) {
-    printJson({ success: true, ...data });
-    return;
-  }
   if (options.quiet) {
     if (data.id !== undefined) process.stdout.write(`${String(data.id)}\n`);
+    return;
+  }
+  if (options.json) {
+    printJson({ success: true, ...data });
     return;
   }
   process.stdout.write(`${green("✓", options.color)} ${message}\n`);

@@ -149,11 +149,24 @@ async function runSession(
       resolve(code);
     };
 
+    // The server types executeCommand into the shell on a timer, so the
+    // command has not run yet when the session reports connected. Wait until
+    // its output stops arriving before asking the shell to exit, rather than
+    // racing a fixed delay.
+    let idleTimer: NodeJS.Timeout | undefined;
+    const scheduleExit = (): void => {
+      if (opts.interactive || !opts.command) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => socket.input("exit\n"), 1500);
+      idleTimer.unref?.();
+    };
+
     socket.onMessage((message) => {
       switch (message.type) {
         case "data":
           // Remote output is the command's output, so it belongs on stdout.
           process.stdout.write(String(message.data ?? ""));
+          scheduleExit();
           break;
         case "error":
           process.stderr.write(`termix: ${message.message ?? "error"}\n`);
@@ -180,6 +193,11 @@ async function runSession(
       printInfo(
         `Connected to ${opts.hostConfig.username}@${opts.hostConfig.ip}.`,
       );
+      return;
     }
+
+    // Nothing has arrived yet, so start the idle countdown: a command that
+    // produces no output still needs the session to end.
+    scheduleExit();
   });
 }
