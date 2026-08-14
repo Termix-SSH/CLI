@@ -189,6 +189,9 @@ jobs:
   verify:
     name: Verify on ${{ matrix.os }}
     needs: [prep, merge-to-main]
+    # normalize is skipped in Overwrite release mode, and a skipped dependency
+    # would otherwise skip everything downstream of it.
+    if: ${{ always() && needs.merge-to-main.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -211,6 +214,7 @@ jobs:
   build-binaries:
     name: Build ${{ matrix.asset }}
     needs: [prep, merge-to-main, verify]
+    if: ${{ always() && needs.verify.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -253,7 +257,7 @@ jobs:
   create-release:
     name: Create the GitHub release
     needs: [prep, merge-to-main, build-binaries]
-    if: ${{ inputs.mode != 'Dry run' }}
+    if: ${{ always() && needs.build-binaries.result == 'success' && inputs.mode != 'Dry run' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -319,7 +323,7 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: [prep, merge-to-main, create-release]
-    if: ${{ inputs.mode == 'Everything' || inputs.mode == 'Overwrite release' }}
+    if: ${{ always() && needs.create-release.result == 'success' && (inputs.mode == 'Everything' || inputs.mode == 'Overwrite release') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
