@@ -13,12 +13,10 @@ concurrency:
 jobs:
   check:
     name: Lint, type-check and test
-    # The config paths and file permissions differ per platform, so the suite
-    # runs on Windows too rather than assuming POSIX behaviour.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-4vcpu-windows-2025]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -46,12 +44,10 @@ jobs:
 
   package:
     name: Verify the published package
-    # Packaging behaviour differs per platform (the bin wrapper, path handling),
-    # so this runs on both rather than assuming Linux.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-4vcpu-windows-2025]
     runs-on: ${{ matrix.os }}
     needs: check
 
@@ -65,6 +61,4 @@ jobs:
 
       - run: npm ci
 
-      # Packs and installs the tarball into a throwaway prefix, then drives the
-      # binary as a user would. Same script contributors run locally.
       - run: npm run smoke

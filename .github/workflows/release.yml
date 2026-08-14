@@ -21,7 +21,7 @@ permissions:
 jobs:
   prep:
     name: Resolve version and validate notes
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       version: ${{ steps.info.outputs.version }}
       release_tag: ${{ steps.info.outputs.release_tag }}
@@ -61,8 +61,6 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "release_tag=release-$VERSION-tag" >> "$GITHUB_OUTPUT"
 
-      # Fails the run before anything is published if a section is missing or
-      # empty, rather than producing a half-written release body.
       - name: Validate release notes
         run: |
           node scripts/generate-release-body.cjs \
@@ -73,7 +71,7 @@ jobs:
     name: Lint, test and sync the version
     needs: [prep]
     if: ${{ inputs.mode != 'Overwrite release' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
@@ -124,7 +122,7 @@ jobs:
     name: Merge to main
     needs: [prep, normalize]
     if: ${{ always() && needs.prep.result == 'success' && (needs.normalize.result == 'success' || needs.normalize.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       main_sha: ${{ steps.merge.outputs.main_sha }}
       build_ref: ${{ steps.merge.outputs.build_ref }}
@@ -189,13 +187,11 @@ jobs:
   verify:
     name: Verify on ${{ matrix.os }}
     needs: [prep, merge-to-main]
-    # normalize is skipped in Overwrite release mode, and a skipped dependency
-    # would otherwise skip everything downstream of it.
     if: ${{ always() && needs.merge-to-main.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-4vcpu-windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -219,15 +215,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: blacksmith-4vcpu-windows-2025
             asset: termix_windows_x64.exe
-          - os: ubuntu-latest
+          - os: blacksmith-2vcpu-ubuntu-2404
             asset: termix_linux_x64
           - os: ubuntu-24.04-arm
             asset: termix_linux_arm64
           - os: macos-13
             asset: termix_macos_x64
-          - os: macos-latest
+          - os: blacksmith-6vcpu-macos-latest
             asset: termix_macos_arm64
     runs-on: ${{ matrix.os }}
     steps:
@@ -242,8 +238,6 @@ jobs:
 
       - run: npm ci
 
-      # Node's SEA embeds the runtime it was built with and cannot
-      # cross-compile, so each target builds on its own runner.
       - name: Build the standalone binary
         run: npm run build:binary -- ${{ matrix.asset }}
 
@@ -258,7 +252,7 @@ jobs:
     name: Create the GitHub release
     needs: [prep, merge-to-main, build-binaries]
     if: ${{ always() && needs.build-binaries.result == 'success' && inputs.mode != 'Dry run' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
@@ -324,7 +318,7 @@ jobs:
     name: Publish to npm
     needs: [prep, merge-to-main, create-release]
     if: ${{ always() && needs.create-release.result == 'success' && (inputs.mode == 'Everything' || inputs.mode == 'Overwrite release') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
@@ -337,8 +331,6 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
-      # Trusted publishing needs npm 11.5.1 or newer, which is ahead of the
-      # version bundled with Node 22.
       - name: Update npm
         run: npm install -g npm@latest
 
@@ -346,15 +338,13 @@ jobs:
 
       - run: npm run build
 
-      # No token: the id-token permission above lets npm verify this workflow
-      # through OIDC, and provenance is attested from the same identity.
       - run: npm publish --provenance --access public
 
   cleanup:
     name: Delete the dev branch
     needs: [prep, merge-to-main, create-release, publish-npm]
     if: ${{ always() && (inputs.mode == 'Everything' || inputs.mode == 'Skip npm') && needs.merge-to-main.result == 'success' && needs.create-release.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
