@@ -4,7 +4,7 @@
 
 <h1>Termix CLI</h1>
 
-<p>Full remote SSH control of your servers on iOS and Android</p>
+<p>Manage your Termix servers from the command line</p>
 
 <p>
   <img src="https://img.shields.io/github/stars/Termix-SSH/CLI?style=flat&label=Stars&color=F39044&labelColor=1a1a1a" />
@@ -20,15 +20,36 @@
 
 </div>
 
-## Overview
-
 ## Features
+
+- Interactive SSH terminal with `termix ssh`, over the same connection the web UI uses
+- One-off remote commands with `termix exec`, exiting with the remote exit code
+- File browsing and transfer over SFTP
+- SSH tunnel and Docker container control
+- Fleets, including running a command across every host at once
+- Host, credential and snippet management, with import and export
+- API keys and host enrollment for scripts, CI and AI agents
+- Table output on a terminal, JSON when piped, with documented exit codes
 
 ## Installation
 
+```bash
+npm install -g termix-cli
+```
+
+Requires Node.js 20.11 or newer. Standalone binaries for Windows, Linux and macOS
+that need no Node.js install are attached to each
+[release](https://github.com/Termix-SSH/CLI/releases).
+
+## Documentation
+
+Full documentation is at [docs.termix.site/cli](https://docs.termix.site/cli/).
+
 ## Planned Features
 
-See [Projects](https://github.com/orgs/Termix-SSH/projects/5) for all planned features. If you are looking to contribute, see [Contributing](https://github.com/Termix-SSH/CLI/blob/main/CONTRIBUTING.md).
+See [Projects](https://github.com/orgs/Termix-SSH/projects/5) for all planned features.
+If you are looking to contribute, see
+[Contributing](https://github.com/Termix-SSH/CLI/blob/main/CONTRIBUTING.md).
 
 <br />
 
@@ -75,7 +96,11 @@ Interested in a paid placement to support development? Email [mail@termix.site](
 
 ## Support
 
-If you need help or want to request a feature with Termix CLI, visit the [Issues](https://github.com/Termix-SSH/Support/issues) page, log in, and press `New Issue`. Please be as detailed as possible in your issue, preferably written in English. You can also join the [Discord](https://discord.gg/jVQGdvHDrf) server and visit the support channel, however, response times may be longer.
+If you need help or want to request a feature with Termix CLI, visit the
+[Issues](https://github.com/Termix-SSH/Support/issues) page, log in, and press
+`New Issue`. Please be as detailed as possible in your issue, preferably written in
+English. You can also join the [Discord](https://discord.gg/jVQGdvHDrf) server and
+visit the support channel, however, response times may be longer.
 
 <br />
 
