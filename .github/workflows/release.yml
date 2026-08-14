@@ -25,18 +25,39 @@ jobs:
     outputs:
       version: ${{ steps.info.outputs.version }}
       release_tag: ${{ steps.info.outputs.release_tag }}
+      dev_branch: ${{ steps.info.outputs.dev_branch }}
     steps:
+      - name: Guard branch (release modes)
+        if: ${{ inputs.mode != 'Overwrite release' && !startsWith(github.ref, 'refs/heads/dev-') }}
+        run: |
+          echo "This mode must be run from a dev branch (got ${{ github.ref }})."
+          exit 1
+
+      - name: Guard branch (overwrite mode)
+        if: ${{ inputs.mode == 'Overwrite release' && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "Overwrite release must be run from main (got ${{ github.ref }})."
+          exit 1
+
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Resolve version
         id: info
         run: |
-          VERSION=$(node -p "require('./package.json').version")
+          if [ "${{ inputs.mode }}" = "Overwrite release" ]; then
+            DEV_BRANCH=""
+            VERSION=$(node -p "require('./package.json').version")
+          else
+            DEV_BRANCH="${GITHUB_REF#refs/heads/}"
+            VERSION=$(node scripts/parse-dev-branch.cjs "$DEV_BRANCH")
+          fi
+          echo "dev_branch=$DEV_BRANCH" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "release_tag=release-$VERSION-tag" >> "$GITHUB_OUTPUT"
 
@@ -48,9 +69,126 @@ jobs:
             --version "${{ steps.info.outputs.version }}" \
             --notes RELEASE_NOTES.md > /dev/null
 
+  normalize:
+    name: Lint, test and sync the version
+    needs: [prep]
+    if: ${{ inputs.mode != 'Overwrite release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prep.outputs.dev_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GHCR_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint and format
+        run: |
+          npm run lint:fix || true
+          npm run format
+
+      - run: npm run type-check
+
+      - run: npm test
+
+      - name: Sync version
+        run: node scripts/sync-version.cjs --version "${{ needs.prep.outputs.version }}"
+
+      - name: Commit changes to the dev branch
+        run: |
+          git config user.name "LukeGus"
+          git config user.email "bugattiguy527@gmail.com"
+
+          if git diff --quiet; then
+            echo "No lint/format/version changes to commit."
+            exit 0
+          fi
+
+          if [ "${{ inputs.mode }}" = "Dry run" ]; then
+            echo "DRY RUN: would commit and push the following to ${{ needs.prep.outputs.dev_branch }}:"
+            git --no-pager diff --stat
+            exit 0
+          fi
+
+          git add -A
+          git commit -m "chore: lint, format, and bump version to ${{ needs.prep.outputs.version }}"
+          git push origin HEAD:"${{ needs.prep.outputs.dev_branch }}"
+
+  merge-to-main:
+    name: Merge to main
+    needs: [prep, normalize]
+    if: ${{ always() && needs.prep.result == 'success' && (needs.normalize.result == 'success' || needs.normalize.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    outputs:
+      main_sha: ${{ steps.merge.outputs.main_sha }}
+      build_ref: ${{ steps.merge.outputs.build_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Generate the PR body
+        run: |
+          node scripts/generate-release-body.cjs \
+            --version "${{ needs.prep.outputs.version }}" \
+            --notes RELEASE_NOTES.md > PR_BODY.md
+
+      - name: Open and squash-merge the PR to main
+        id: merge
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+        run: |
+          DEV_BRANCH="${{ needs.prep.outputs.dev_branch }}"
+          TITLE="release-${{ needs.prep.outputs.version }}"
+
+          if [ "${{ inputs.mode }}" = "Overwrite release" ]; then
+            echo "OVERWRITE: no merge; building from main as-is."
+            echo "build_ref=main" >> "$GITHUB_OUTPUT"
+            echo "main_sha=$(gh api repos/${{ github.repository }}/commits/main -q .sha)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ inputs.mode }}" = "Dry run" ]; then
+            echo "DRY RUN: would open and squash-merge a PR from $DEV_BRANCH into main."
+            echo "DRY RUN: downstream jobs will build from $DEV_BRANCH instead."
+            echo "build_ref=$DEV_BRANCH" >> "$GITHUB_OUTPUT"
+            echo "main_sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --head "$DEV_BRANCH" --base main --state open --json number -q '.[0].number' || true)
+          if [ -z "$PR_NUMBER" ]; then
+            PR_NUMBER=$(gh pr create --repo ${{ github.repository }} \
+              --base main --head "$DEV_BRANCH" \
+              --title "$TITLE" --body-file PR_BODY.md \
+              | grep -oE '[0-9]+$')
+          fi
+
+          gh pr merge "$PR_NUMBER" --repo ${{ github.repository }} --squash --admin
+
+          STATE=$(gh pr view "$PR_NUMBER" --repo ${{ github.repository }} --json state -q .state)
+          if [ "$STATE" != "MERGED" ]; then
+            echo "PR #$PR_NUMBER did not merge (state: $STATE)."
+            exit 1
+          fi
+
+          MAIN_SHA=$(gh api repos/${{ github.repository }}/commits/main -q .sha)
+          echo "main_sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+          echo "build_ref=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+
   verify:
     name: Verify on ${{ matrix.os }}
-    needs: [prep]
+    needs: [prep, merge-to-main]
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +196,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.merge-to-main.outputs.build_ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -70,7 +210,7 @@ jobs:
 
   build-binaries:
     name: Build ${{ matrix.asset }}
-    needs: [prep, verify]
+    needs: [prep, merge-to-main, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -88,6 +228,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.merge-to-main.outputs.build_ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -108,25 +250,20 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  release:
-    name: Publish
-    needs: [prep, verify, build-binaries]
+  create-release:
+    name: Create the GitHub release
+    needs: [prep, merge-to-main, build-binaries]
     if: ${{ inputs.mode != 'Dry run' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 1
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          registry-url: https://registry.npmjs.org
-
-      - run: npm ci
-
-      - run: npm run build
 
       - uses: actions/download-artifact@v4
         with:
@@ -135,13 +272,6 @@ jobs:
 
       - name: List the collected assets
         run: ls -la release
-
-      - name: Generate the release body
-        run: |
-          node scripts/generate-release-body.cjs \
-            --version "${{ needs.prep.outputs.version }}" \
-            --notes RELEASE_NOTES.md > RELEASE_BODY.md
-          cat RELEASE_BODY.md
 
       - name: Clear existing assets (overwrite mode)
         if: ${{ inputs.mode == 'Overwrite release' }}
@@ -157,7 +287,14 @@ jobs:
             [ -n "$ASSET" ] && gh release delete-asset "$TAG" "$ASSET" --repo ${{ github.repository }} --yes || true
           done
 
-      - name: Create or update the GitHub release
+      - name: Generate the release body
+        run: |
+          node scripts/generate-release-body.cjs \
+            --version "${{ needs.prep.outputs.version }}" \
+            --notes RELEASE_NOTES.md > RELEASE_BODY.md
+          cat RELEASE_BODY.md
+
+      - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -168,7 +305,8 @@ jobs:
               --title "$TITLE" --notes-file RELEASE_BODY.md
           else
             gh release create "$TAG" --repo ${{ github.repository }} \
-              --title "$TITLE" --notes-file RELEASE_BODY.md --target "$GITHUB_SHA"
+              --title "$TITLE" --notes-file RELEASE_BODY.md \
+              --target "${{ needs.merge-to-main.outputs.main_sha }}"
           fi
 
       - name: Upload the binaries
@@ -178,8 +316,44 @@ jobs:
           gh release upload "${{ needs.prep.outputs.release_tag }}" \
             release/* --repo ${{ github.repository }} --clobber
 
-      - name: Publish to npm
-        if: ${{ inputs.mode != 'Skip npm' }}
-        run: npm publish --provenance --access public
+  publish-npm:
+    name: Publish to npm
+    needs: [prep, merge-to-main, create-release]
+    if: ${{ inputs.mode == 'Everything' || inputs.mode == 'Overwrite release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  cleanup:
+    name: Delete the dev branch
+    needs: [prep, merge-to-main, create-release, publish-npm]
+    if: ${{ always() && (inputs.mode == 'Everything' || inputs.mode == 'Skip npm') && needs.merge-to-main.result == 'success' && needs.create-release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Delete the dev branch
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+        run: |
+          git push https://x-access-token:${{ secrets.GHCR_TOKEN || github.token }}@github.com/${{ github.repository }}.git \
+            --delete "${{ needs.prep.outputs.dev_branch }}" || true
