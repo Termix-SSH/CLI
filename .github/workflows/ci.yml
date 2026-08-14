@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, type-check and test
+    # The config paths and file permissions differ per platform, so the suite
+    # runs on Windows too rather than assuming POSIX behaviour.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run format:check
+
+      - run: npm run lint
+
+      - run: npm run type-check
+
+      - run: npm test
+
+      - run: npm run build
+
+      - name: Smoke test the built CLI
+        run: node dist/index.js --version
+
+  package:
+    name: Verify the published package
+    # Packaging behaviour differs per platform (the bin wrapper, path handling),
+    # so this runs on both rather than assuming Linux.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    needs: check
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Packs and installs the tarball into a throwaway prefix, then drives the
+      # binary as a user would. Same script contributors run locally.
+      - run: npm run smoke
