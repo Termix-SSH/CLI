@@ -1,5 +1,5 @@
 {
-  "name": "termix-cli",
+  "name": "@termix/cli",
   "version": "1.0.0",
   "description": "Command-line interface for Termix. Manage SSH hosts, run commands, transfer files and open terminals from your shell.",
   "license": "Apache-2.0",
@@ -49,7 +49,7 @@
     "build:binary": "npm run build && node scripts/build-binary.mjs",
     "smoke": "node scripts/smoke.mjs",
     "link:local": "npm run build && npm link",
-    "unlink:local": "npm unlink -g termix-cli",
+    "unlink:local": "npm unlink -g @termix/cli",
     "verify": "npm run format:check && npm run lint && npm run type-check && npm test && npm run smoke",
     "prepare": "husky || true",
     "prepublishOnly": "npm run build"

@@ -34,7 +34,7 @@
 ## Installation
 
 ```bash
-npm install -g termix-cli
+npm install -g @termix/cli
 ```
 
 Requires Node.js 20.11 or newer. Standalone binaries for Windows, Linux and macOS
