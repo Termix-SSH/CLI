@@ -54,7 +54,7 @@ function buildTable(version) {
     "| ------------ | ------- | ----- | ----- |",
     `| **x86-64 (64-bit)** | [EXE](${url("termix_windows_x64.exe")}) | [Binary](${url("termix_linux_x64")}) | [Binary](${url("termix_macos_x64")}) |`,
     `| **AArch64 (ARM64)** | — | [Binary](${url("termix_linux_arm64")}) | [Binary](${url("termix_macos_arm64")}) |`,
-    `| **Any** | [npm](https://www.npmjs.com/package/@termix/cli) | [npm](https://www.npmjs.com/package/@termix/cli) | [npm](https://www.npmjs.com/package/@termix/cli) |`,
+    `| **Any** | [npm](https://www.npmjs.com/package/@termix-cli/cli) | [npm](https://www.npmjs.com/package/@termix-cli/cli) | [npm](https://www.npmjs.com/package/@termix-cli/cli) |`,
   ].join("\n");
 }
 
@@ -77,7 +77,7 @@ function main() {
 
   const install = [
     "```bash",
-    "npm install -g @termix/cli",
+    "npm install -g @termix-cli/cli",
     "```",
     "",
     "Or download a standalone binary below, which needs no Node.js install.",
