@@ -1,15 +1,22 @@
 import fs from "node:fs";
 import type { Command } from "commander";
-import { resolveConfig } from "../core/config.js";
-import { TermixClient } from "../core/http.js";
-import { printJson, run } from "../core/output.js";
+import { createContext } from "../core/context.js";
+import { UsageError } from "../core/errors.js";
+import {
+  printList,
+  printRecord,
+  printResult,
+  run,
+  type Column,
+} from "../core/output/index.js";
 import { parseId } from "./hosts.js";
 
 /**
- * Non-secret credential fields safe to print, mirroring the allowlist approach
- * used for hosts. This is load-bearing: unlike the hosts endpoints, the
- * backend's GET /credentials/:id returns the plaintext password/key/keyPassword,
- * so printing anything outside this list could leak a secret.
+ * Non-secret credential fields safe to print.
+ *
+ * This is load-bearing, not defence in depth: unlike the host endpoints,
+ * GET /credentials/:id returns the plaintext password, key and keyPassword,
+ * so anything outside this allowlist would print a secret to stdout.
  */
 const SAFE_CREDENTIAL_FIELDS = [
   "id",
@@ -41,6 +48,17 @@ export function sanitiseCredential(
   return out;
 }
 
+type CredentialRow = Record<string, unknown>;
+
+const CREDENTIAL_COLUMNS: Column<CredentialRow>[] = [
+  { header: "id", value: (c) => c.id, align: "right" },
+  { header: "name", value: (c) => c.name },
+  { header: "auth", value: (c) => c.authType },
+  { header: "username", value: (c) => c.username },
+  { header: "folder", value: (c) => c.folder },
+  { header: "used", value: (c) => c.usageCount, align: "right" },
+];
+
 interface CredentialOpts {
   name?: string;
   description?: string;
@@ -61,9 +79,36 @@ function addCredentialOptions(cmd: Command): Command {
     .option("--tags <tags>", "Comma-separated tags")
     .option("--auth-type <type>", "Authentication type: password | key")
     .option("--username <username>", "SSH username")
-    .option("--password <password>", "Password (authType=password)")
     .option("--key-file <path>", "Path to a private key file (authType=key)")
-    .option("--key-password <passphrase>", "Passphrase for the private key");
+    .option(
+      "--password <password>",
+      "Password. Prefer TERMIX_CREDENTIAL_PASSWORD: argv is visible to other processes",
+    )
+    .option(
+      "--key-password <passphrase>",
+      "Key passphrase. Prefer TERMIX_CREDENTIAL_KEY_PASSWORD",
+    );
+}
+
+/**
+ * Read a secret, preferring the environment over argv.
+ *
+ * Command-line arguments show up in `ps` output and shell history, so the env
+ * var is the documented path and passing the flag warns.
+ */
+function resolveSecret(
+  flagValue: string | undefined,
+  envName: string,
+  flagName: string,
+): string | undefined {
+  const fromEnv = process.env[envName];
+  if (fromEnv) return fromEnv;
+  if (flagValue !== undefined) {
+    process.stderr.write(
+      `termix: warning: ${flagName} is visible in the process list and shell history; use ${envName} instead\n`,
+    );
+  }
+  return flagValue;
 }
 
 function buildCredentialPayload(opts: CredentialOpts): Record<string, unknown> {
@@ -79,113 +124,141 @@ function buildCredentialPayload(opts: CredentialOpts): Record<string, unknown> {
   }
   if (opts.authType !== undefined) {
     if (opts.authType !== "password" && opts.authType !== "key") {
-      throw new Error(
-        `Invalid --auth-type: "${opts.authType}" (expected password|key).`,
+      throw new UsageError(
+        `Invalid --auth-type: "${opts.authType}" (expected password or key).`,
       );
     }
     body.authType = opts.authType;
   }
   if (opts.username !== undefined) body.username = opts.username;
-  if (opts.password !== undefined) body.password = opts.password;
+
+  const password = resolveSecret(
+    opts.password,
+    "TERMIX_CREDENTIAL_PASSWORD",
+    "--password",
+  );
+  if (password !== undefined) body.password = password;
+
+  const keyPassword = resolveSecret(
+    opts.keyPassword,
+    "TERMIX_CREDENTIAL_KEY_PASSWORD",
+    "--key-password",
+  );
+  if (keyPassword !== undefined) body.keyPassword = keyPassword;
+
   if (opts.keyFile !== undefined) {
     try {
       body.key = fs.readFileSync(opts.keyFile, "utf8");
     } catch {
-      throw new Error(`Could not read key file: ${opts.keyFile}`);
+      throw new UsageError(`Could not read key file: ${opts.keyFile}`);
     }
   }
-  if (opts.keyPassword !== undefined) body.keyPassword = opts.keyPassword;
   return body;
 }
 
 export function registerCredentialCommands(program: Command): void {
   const credentials = program
     .command("credentials")
-    .description(
-      "Manage saved SSH credentials. Listing returns metadata only — secrets are never printed.",
-    );
+    .description("Manage saved SSH credentials. Secrets are never printed.");
 
   credentials
-    .command("list")
-    .description("List saved credentials (metadata only).")
-    .action(async () =>
-      run(async () => {
-        const client = new TermixClient(resolveConfig());
-        const creds = await client.request<Array<Record<string, unknown>>>({
+    .command("list", { isDefault: true })
+    .description("List saved credentials.")
+    .action(async function (this: Command) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        const creds = await client.request<CredentialRow[]>({
           method: "GET",
           path: "/credentials",
         });
-        printJson(creds.map(sanitiseCredential));
-      }),
-    );
+        printList(creds.map(sanitiseCredential), CREDENTIAL_COLUMNS);
+      });
+    });
 
   credentials
     .command("get <credentialId>")
-    .description("Show one credential's metadata (secrets are not printed).")
-    .action(async (credentialId: string) =>
-      run(async () => {
-        const client = new TermixClient(resolveConfig());
-        const cred = await client.request<Record<string, unknown>>({
+    .description("Show one credential's metadata.")
+    .action(async function (this: Command, credentialId: string) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        const cred = await client.request<CredentialRow>({
           method: "GET",
           path: `/credentials/${parseId(credentialId)}`,
         });
-        printJson(sanitiseCredential(cred));
-      }),
-    );
+        printRecord(sanitiseCredential(cred));
+      });
+    });
 
   addCredentialOptions(
     credentials
       .command("create")
       .description(
-        "Create a saved SSH credential. --name, --auth-type and --username are required.",
+        "Create a saved credential. --name, --auth-type and --username are required.",
       ),
-  ).action(async (opts: CredentialOpts) =>
-    run(async () => {
+  ).action(async function (this: Command, opts: CredentialOpts) {
+    await run(async () => {
       if (!opts.name || !opts.authType || !opts.username) {
-        throw new Error(
+        throw new UsageError(
           "`credentials create` requires --name, --auth-type and --username.",
         );
       }
-      const client = new TermixClient(resolveConfig());
-      const created = await client.request<Record<string, unknown>>({
+      const { client } = await createContext(this);
+      const created = await client.request<CredentialRow>({
         method: "POST",
         path: "/credentials",
         data: buildCredentialPayload(opts),
       });
-      printJson({ id: created.id, name: created.name });
-    }),
-  );
+      printResult(`Created credential ${created.id}.`, {
+        id: created.id,
+        name: created.name,
+      });
+    });
+  });
 
   addCredentialOptions(
     credentials
       .command("update <credentialId>")
-      .description("Update a saved credential (only the fields you pass)."),
-  ).action(async (credentialId: string, opts: CredentialOpts) =>
-    run(async () => {
-      const client = new TermixClient(resolveConfig());
-      const updated = await client.request<Record<string, unknown>>({
+      .description(
+        "Update a saved credential. Only the fields you pass change.",
+      ),
+  ).action(async function (
+    this: Command,
+    credentialId: string,
+    opts: CredentialOpts,
+  ) {
+    await run(async () => {
+      const id = parseId(credentialId);
+      const payload = buildCredentialPayload(opts);
+      if (Object.keys(payload).length === 0) {
+        throw new UsageError(
+          "`credentials update` needs at least one field to change.",
+        );
+      }
+      const { client } = await createContext(this);
+      const updated = await client.request<CredentialRow>({
         method: "PUT",
-        path: `/credentials/${parseId(credentialId)}`,
-        data: buildCredentialPayload(opts),
+        path: `/credentials/${id}`,
+        data: payload,
       });
-      printJson({
-        id: updated.id ?? parseId(credentialId),
-        name: updated.name,
+      printResult(`Updated credential ${id}.`, {
+        id: updated.id ?? id,
+        name: updated.name ?? payload.name,
       });
-    }),
-  );
+    });
+  });
 
   credentials
     .command("delete <credentialId>")
-    .description("Delete a saved credential by id.")
-    .action(async (credentialId: string) =>
-      run(async () => {
-        const client = new TermixClient(resolveConfig());
-        const data = await client.request({
+    .description("Delete a saved credential.")
+    .action(async function (this: Command, credentialId: string) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        const id = parseId(credentialId);
+        await client.request({
           method: "DELETE",
-          path: `/credentials/${parseId(credentialId)}`,
+          path: `/credentials/${id}`,
         });
-        printJson(data);
-      }),
-    );
+        printResult(`Deleted credential ${id}.`, { id });
+      });
+    });
 }

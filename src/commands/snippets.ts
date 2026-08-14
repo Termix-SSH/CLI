@@ -1,10 +1,25 @@
 import fs from "node:fs";
 import type { Command } from "commander";
-import { resolveConfig } from "../core/config.js";
-import { TermixClient } from "../core/http.js";
-import { fail, printJson, run } from "../core/output.js";
+import { createContext } from "../core/context.js";
+import { ExitCode, UsageError } from "../core/errors.js";
+import {
+  fail,
+  printList,
+  printResult,
+  run,
+  type Column,
+} from "../core/output/index.js";
 import { parseId } from "./hosts.js";
-import type { SnippetExecuteResponse } from "./exec.js";
+import { parseExecOutput, type SnippetExecuteResponse } from "./exec.js";
+
+type SnippetRow = Record<string, unknown>;
+
+const SNIPPET_COLUMNS: Column<SnippetRow>[] = [
+  { header: "id", value: (s) => s.id, align: "right" },
+  { header: "name", value: (s) => s.name },
+  { header: "folder", value: (s) => s.folder },
+  { header: "description", value: (s) => s.description },
+];
 
 /** Resolve snippet content from --content or --content-file (mutually exclusive). */
 function resolveContent(opts: {
@@ -12,16 +27,33 @@ function resolveContent(opts: {
   contentFile?: string;
 }): string | undefined {
   if (opts.content !== undefined && opts.contentFile !== undefined) {
-    throw new Error("Pass only one of --content or --content-file.");
+    throw new UsageError("Pass only one of --content or --content-file.");
   }
   if (opts.contentFile !== undefined) {
     try {
       return fs.readFileSync(opts.contentFile, "utf8");
     } catch {
-      throw new Error(`Could not read content file: ${opts.contentFile}`);
+      throw new UsageError(`Could not read content file: ${opts.contentFile}`);
     }
   }
   return opts.content;
+}
+
+/** Parse repeated --input NAME=VALUE pairs for snippet variables. */
+function collectInput(
+  value: string,
+  previous: Record<string, string>,
+): Record<string, string> {
+  const index = value.indexOf("=");
+  if (index <= 0) {
+    throw new UsageError(
+      `Invalid --input "${value}" (expected NAME=VALUE, e.g. INPUT_1=production).`,
+    );
+  }
+  return {
+    ...previous,
+    [value.slice(0, index)]: value.slice(index + 1),
+  };
 }
 
 export function registerSnippetCommands(program: Command): void {
@@ -30,24 +62,20 @@ export function registerSnippetCommands(program: Command): void {
     .description("Manage and run the command snippets saved in Termix.");
 
   snippets
-    .command("list")
-    .description("List saved snippets (id, name, description, folder).")
-    .action(async () =>
-      run(async () => {
-        const client = new TermixClient(resolveConfig());
-        const all = await client.request<Array<Record<string, unknown>>>({
+    .command("list", { isDefault: true })
+    .description("List saved snippets.")
+    .action(async function (this: Command) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        const all = await client.request<SnippetRow[]>({
           method: "GET",
           path: "/snippets",
         });
-        const summaries = all.map((s) => ({
-          id: s.id,
-          name: s.name,
-          description: s.description ?? null,
-          folder: s.folder ?? null,
-        }));
-        printJson({ count: summaries.length, snippets: summaries });
-      }),
-    );
+        printList(all, SNIPPET_COLUMNS, {
+          jsonWrapper: (rows) => ({ count: rows.length, snippets: rows }),
+        });
+      });
+    });
 
   snippets
     .command("create")
@@ -57,111 +85,138 @@ export function registerSnippetCommands(program: Command): void {
     .option("--content-file <path>", "Read snippet content from a file")
     .option("--description <text>", "Description")
     .option("--folder <folder>", "Folder")
-    .action(
-      async (opts: {
+    .action(async function (
+      this: Command,
+      opts: {
         name: string;
         content?: string;
         contentFile?: string;
         description?: string;
         folder?: string;
-      }) =>
-        run(async () => {
-          const content = resolveContent(opts);
-          if (!content) {
-            throw new Error("Provide --content or --content-file.");
-          }
-          const client = new TermixClient(resolveConfig());
-          const created = await client.request<Record<string, unknown>>({
-            method: "POST",
-            path: "/snippets",
-            data: {
-              name: opts.name,
-              content,
-              description: opts.description,
-              folder: opts.folder,
-            },
-          });
-          printJson({ id: created.id, name: created.name });
-        }),
-    );
+      },
+    ) {
+      await run(async () => {
+        const content = resolveContent(opts);
+        if (!content) {
+          throw new UsageError("Provide --content or --content-file.");
+        }
+        const { client } = await createContext(this);
+        const created = await client.request<SnippetRow>({
+          method: "POST",
+          path: "/snippets",
+          data: {
+            name: opts.name,
+            content,
+            description: opts.description,
+            folder: opts.folder,
+          },
+        });
+        printResult(`Created snippet ${created.id}.`, {
+          id: created.id,
+          name: created.name,
+        });
+      });
+    });
 
   snippets
     .command("update <snippetId>")
-    .description("Update fields of a saved snippet (only the ones you pass).")
+    .description("Update a saved snippet. Only the fields you pass change.")
     .option("--name <name>", "Snippet name")
     .option("--content <content>", "Snippet content")
     .option("--content-file <path>", "Read snippet content from a file")
     .option("--description <text>", "Description")
     .option("--folder <folder>", "Folder")
-    .action(
-      async (
-        snippetId: string,
-        opts: {
-          name?: string;
-          content?: string;
-          contentFile?: string;
-          description?: string;
-          folder?: string;
-        },
-      ) =>
-        run(async () => {
-          const body: Record<string, unknown> = {};
-          if (opts.name !== undefined) body.name = opts.name;
-          const content = resolveContent(opts);
-          if (content !== undefined) body.content = content;
-          if (opts.description !== undefined)
-            body.description = opts.description;
-          if (opts.folder !== undefined) body.folder = opts.folder;
+    .action(async function (
+      this: Command,
+      snippetId: string,
+      opts: {
+        name?: string;
+        content?: string;
+        contentFile?: string;
+        description?: string;
+        folder?: string;
+      },
+    ) {
+      await run(async () => {
+        const body: Record<string, unknown> = {};
+        if (opts.name !== undefined) body.name = opts.name;
+        const content = resolveContent(opts);
+        if (content !== undefined) body.content = content;
+        if (opts.description !== undefined) body.description = opts.description;
+        if (opts.folder !== undefined) body.folder = opts.folder;
 
-          const client = new TermixClient(resolveConfig());
-          const updated = await client.request<Record<string, unknown>>({
-            method: "PUT",
-            path: `/snippets/${parseId(snippetId)}`,
-            data: body,
-          });
-          printJson(updated);
-        }),
-    );
+        if (Object.keys(body).length === 0) {
+          throw new UsageError(
+            "`snippets update` needs at least one field to change.",
+          );
+        }
+
+        const id = parseId(snippetId);
+        const { client } = await createContext(this);
+        await client.request({
+          method: "PUT",
+          path: `/snippets/${id}`,
+          data: body,
+        });
+        printResult(`Updated snippet ${id}.`, { id });
+      });
+    });
 
   snippets
     .command("delete <snippetId>")
-    .description("Delete a saved snippet by id.")
-    .action(async (snippetId: string) =>
-      run(async () => {
-        const client = new TermixClient(resolveConfig());
-        const data = await client.request({
-          method: "DELETE",
-          path: `/snippets/${parseId(snippetId)}`,
-        });
-        printJson(data);
-      }),
-    );
+    .description("Delete a saved snippet.")
+    .action(async function (this: Command, snippetId: string) {
+      await run(async () => {
+        const id = parseId(snippetId);
+        const { client } = await createContext(this);
+        await client.request({ method: "DELETE", path: `/snippets/${id}` });
+        printResult(`Deleted snippet ${id}.`, { id });
+      });
+    });
 
   snippets
     .command("run <snippetId>")
     .description(
-      "Execute a saved snippet on a host. Prints remote stdout/stderr; exits 0 when the snippet produced no stderr, 1 otherwise (the API does not expose the exit code).",
+      "Execute a saved snippet on a host. Exits with the remote exit code " +
+        "when the snippet reports one, otherwise 0 on success (255 on CLI or API errors).",
     )
     .requiredOption("--host <hostId>", "Host id to run the snippet on")
-    .action(async (snippetIdArg: string, opts: { host: string }) => {
+    .option(
+      "--input <NAME=VALUE>",
+      "Value for a snippet variable; repeatable",
+      collectInput,
+      {} as Record<string, string>,
+    )
+    .action(async function (
+      this: Command,
+      snippetIdArg: string,
+      opts: { host: string; input: Record<string, string> },
+    ) {
       try {
         const snippetId = parseId(snippetIdArg);
-        const hostId = parseId(opts.host);
-        const client = new TermixClient(resolveConfig());
+        const hostId = parseId(opts.host, "--host");
+        const { client } = await createContext(this);
 
         const result = await client.request<SnippetExecuteResponse>({
           method: "POST",
           path: "/snippets/execute",
-          data: { snippetId, hostId },
+          data: {
+            snippetId,
+            hostId,
+            ...(Object.keys(opts.input).length
+              ? { inputValues: opts.input }
+              : {}),
+          },
         });
 
-        if (result.output) process.stdout.write(result.output);
+        // A snippet written by hand will not carry the exec marker, but one
+        // might, so honour it when present.
+        const { output, exitCode } = parseExecOutput(result.output ?? "");
+        if (output) process.stdout.write(output);
         if (result.error) process.stderr.write(result.error);
-        // Set exitCode instead of calling process.exit() so a piped stdout
-        // fully drains before the process terminates.
-        process.exitCode = result.success ? 0 : 1;
+        process.exitCode = exitCode ?? (result.success ? 0 : 1);
       } catch (error) {
-        fail(error, 255);
+        fail(error, ExitCode.INTERNAL);
       }
     });
 }
