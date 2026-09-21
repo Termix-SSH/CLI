@@ -88,14 +88,93 @@ describe("TerminalSocket", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
+
     expect(harness.received[0]).toMatchObject({
       type: "connectToHost",
       data: {
         cols: 120,
         rows: 40,
-        hostConfig: { id: 7, ip: "10.0.0.5", port: 22, username: "root" },
+        hostConfig: {
+          id: 7,
+          ip: "10.0.0.5",
+          port: 22,
+          username: "root",
+        },
       },
     });
+
+    socket.close();
+  });
+
+  it("waits until the terminal application handler answers ping", async () => {
+    const harness = await startServer((ws) => {
+      ws.on("message", (raw) => {
+        const message = JSON.parse(raw.toString("utf8")) as {
+          type?: string;
+        };
+
+        if (message.type === "ping") {
+          ws.send(JSON.stringify({ type: "pong" }));
+        }
+      });
+    });
+
+    const socket = new TerminalSocket(harness.config, "jwt");
+    await socket.open();
+
+    await socket.waitUntilReady();
+
+    expect(harness.received.some((message) => message.type === "ping")).toBe(
+      true,
+    );
+
+    socket.close();
+  });
+
+  it("keeps probing until the terminal application handler becomes ready", async () => {
+    const handlerDelayMs = 150;
+    const probeIntervalMs = 25;
+
+    const harness = await startServer((ws) => {
+      setTimeout(() => {
+        ws.on("message", (raw) => {
+          const message = JSON.parse(raw.toString("utf8")) as {
+            type?: string;
+          };
+
+          if (message.type === "ping") {
+            ws.send(JSON.stringify({ type: "pong" }));
+          }
+        });
+      }, handlerDelayMs);
+    });
+
+    const socket = new TerminalSocket(harness.config, "jwt");
+    await socket.open();
+
+    await socket.waitUntilReady(
+      harness.config.requestTimeoutMs,
+      probeIntervalMs,
+    );
+
+    const pingCount = harness.received.filter(
+      (message) => message.type === "ping",
+    ).length;
+
+    expect(pingCount).toBeGreaterThan(1);
+
+    socket.close();
+  });
+
+  it("times out when the terminal application handler never becomes ready", async () => {
+    const harness = await startServer();
+    const socket = new TerminalSocket(harness.config, "jwt");
+    await socket.open();
+
+    await expect(socket.waitUntilReady(100, 20)).rejects.toThrow(
+      /Timed out waiting for pong/,
+    );
+
     socket.close();
   });
 
