@@ -209,5 +209,12 @@ export const ENDPOINTS: EndpointRef[] = [
  * server surfaces the CLI depends on is documented in one place.
  */
 export const WEBSOCKET_ENDPOINTS = [
-  { path: "/ssh/websocket/", usedBy: "ssh (interactive terminal)" },
+  {
+    path: "/plugin-ws/ssh-terminal/terminal",
+    usedBy: "ssh (interactive terminal, Termix 2.9 and later)",
+  },
+  {
+    path: "/ssh/websocket/",
+    usedBy: "ssh (interactive terminal, before Termix 2.9)",
+  },
 ];
