@@ -77,7 +77,7 @@ jobs:
         with:
           ref: ${{ needs.prep.outputs.dev_branch }}
           fetch-depth: 0
-          token: ${{ secrets.GHCR_TOKEN || github.token }}
+          token: ${{ secrets.TERMIX_PAT || github.token }}
 
       - uses: actions/setup-node@v4
         with:
@@ -144,7 +144,7 @@ jobs:
       - name: Open and squash-merge the PR to main
         id: merge
         env:
-          GH_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.TERMIX_PAT || github.token }}
         run: |
           DEV_BRANCH="${{ needs.prep.outputs.dev_branch }}"
           TITLE="release-${{ needs.prep.outputs.version }}"
@@ -358,7 +358,7 @@ jobs:
 
       - name: Delete the dev branch
         env:
-          GH_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.TERMIX_PAT || github.token }}
         run: |
-          git push https://x-access-token:${{ secrets.GHCR_TOKEN || github.token }}@github.com/${{ github.repository }}.git \
+          git push https://x-access-token:${{ secrets.TERMIX_PAT || github.token }}@github.com/${{ github.repository }}.git \
             --delete "${{ needs.prep.outputs.dev_branch }}" || true
