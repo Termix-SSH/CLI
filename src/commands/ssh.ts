@@ -76,6 +76,7 @@ export function registerSshCommands(program: Command): void {
 
         const socket = new TerminalSocket(config, token);
         await socket.open();
+        await socket.waitUntilReady();
 
         const exitCode = await runSession(socket, {
           hostConfig,

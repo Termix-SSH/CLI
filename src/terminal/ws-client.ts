@@ -239,6 +239,26 @@ export class TerminalSocket {
       handler(code, reason.toString("utf8")),
     );
   }
+
+  async waitUntilReady(
+    timeoutMs = this.config.requestTimeoutMs,
+    probeIntervalMs = 100,
+  ): Promise<void> {
+    const ready = this.waitFor(["pong"], timeoutMs);
+
+    const probe = setInterval(() => {
+      this.send("ping");
+    }, probeIntervalMs);
+
+    // Do not wait for the first interval tick.
+    this.send("ping");
+
+    try {
+      await ready;
+    } finally {
+      clearInterval(probe);
+    }
+  }
 }
 
 function parseMessage(raw: WebSocket.RawData): ServerMessage | null {
