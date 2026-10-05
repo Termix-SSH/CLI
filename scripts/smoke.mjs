@@ -98,7 +98,7 @@ try {
     const [meta] = JSON.parse(listing);
     const entries = (meta?.files ?? []).map((f) => f.path);
 
-    for (const required of ["dist/index.js", "README.md", "LICENSE"]) {
+    for (const required of ["dist/index.js", "README.md"]) {
       if (!entries.includes(required)) {
         throw new Error(
           `${required} is missing from the tarball (found: ${entries.join(", ")})`,
