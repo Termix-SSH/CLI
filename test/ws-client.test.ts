@@ -2,7 +2,10 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import { describe, it, expect, afterEach } from "vitest";
-import { TerminalSocket } from "../src/terminal/ws-client.js";
+import {
+  TERMINAL_WEBSOCKET_PATHS,
+  TerminalSocket,
+} from "../src/terminal/ws-client.js";
 import type { CliConfig } from "../src/core/config.js";
 
 let server: http.Server | undefined;
@@ -12,21 +15,30 @@ interface Harness {
   config: CliConfig;
   /** Authorization header seen on the upgrade request. */
   authHeader: () => string | undefined;
+  /** Path of every upgrade request, accepted or not, in order. */
+  upgrades: string[];
   /** Every message the client sent, in order. */
   received: Array<{ type: string; data?: unknown }>;
   /** Push a message to the connected client. */
   send: (payload: unknown) => void;
 }
 
+const [CURRENT_PATH, LEGACY_PATH] = TERMINAL_WEBSOCKET_PATHS;
+
 async function startServer(
   onConnect?: (ws: WebSocket) => void,
+  path = CURRENT_PATH,
 ): Promise<Harness> {
   const received: Array<{ type: string; data?: unknown }> = [];
+  const upgrades: string[] = [];
   let seenAuth: string | undefined;
   let socket: WebSocket | undefined;
 
   server = http.createServer();
-  wss = new WebSocketServer({ server, path: "/ssh/websocket/" });
+  server.on("upgrade", (req) => upgrades.push(req.url ?? ""));
+  // A request for any other path is refused with a 400, as an older server
+  // answers the current path.
+  wss = new WebSocketServer({ server, path });
 
   wss.on("connection", (ws, req) => {
     seenAuth = req.headers.authorization;
@@ -51,6 +63,7 @@ async function startServer(
       requestTimeoutMs: 5000,
     },
     authHeader: () => seenAuth,
+    upgrades,
     received,
     send: (payload) => socket?.send(JSON.stringify(payload)),
   };
@@ -172,5 +185,102 @@ describe("TerminalSocket", () => {
     );
 
     await expect(socket.open()).rejects.toThrow(/termix login/);
+  });
+
+  it("connects at the plugin path that Termix 2.9 serves", async () => {
+    const harness = await startServer();
+    const socket = new TerminalSocket(harness.config, "jwt");
+    await socket.open();
+
+    expect(harness.upgrades).toEqual(["/plugin-ws/ssh-terminal/terminal"]);
+    socket.close();
+  });
+
+  it("falls back to /ssh/websocket/ on a server older than 2.9", async () => {
+    const harness = await startServer(undefined, LEGACY_PATH);
+    const socket = new TerminalSocket(harness.config, "jwt");
+    await socket.open();
+
+    expect(harness.upgrades).toEqual([CURRENT_PATH, LEGACY_PATH]);
+    expect(harness.authHeader()).toBe("Bearer jwt");
+    socket.close();
+  });
+
+  it("does not retry the old path when the credential is refused", async () => {
+    const upgrades: string[] = [];
+    server = http.createServer((req, res) => {
+      upgrades.push(req.url ?? "");
+      res.writeHead(401);
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      server!.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = server!.address() as AddressInfo;
+
+    const socket = new TerminalSocket(
+      {
+        url: `http://127.0.0.1:${port}`,
+        insecureTls: false,
+        requestTimeoutMs: 5000,
+      },
+      "expired",
+    );
+
+    await expect(socket.open()).rejects.toThrow(/termix login/);
+    expect(upgrades).toEqual([CURRENT_PATH]);
+  });
+
+  it("reports the failure when neither path is served", async () => {
+    // Cloudflare in front of a server with no terminal route answers 502.
+    server = http.createServer((_req, res) => {
+      res.writeHead(502);
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      server!.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = server!.address() as AddressInfo;
+
+    const socket = new TerminalSocket(
+      {
+        url: `http://127.0.0.1:${port}`,
+        insecureTls: false,
+        requestTimeoutMs: 5000,
+      },
+      "jwt",
+    );
+
+    await expect(socket.open()).rejects.toThrow(
+      "Could not open the terminal connection: Unexpected server response: 502",
+    );
+  });
+
+  it("explains a session the server closes for want of authentication", async () => {
+    // 2.9 accepts the upgrade, then closes with 1008 for a missing or
+    // expired token instead of refusing the handshake with a 401.
+    const harness = await startServer((ws) =>
+      ws.close(1008, "Authentication required"),
+    );
+    const socket = new TerminalSocket(harness.config, "expired");
+    await socket.open();
+
+    await expect(socket.waitFor(["connected"], 2000)).rejects.toThrow(
+      /termix login/,
+    );
+    socket.close();
+  });
+
+  it("includes the server's reason when it closes the connection", async () => {
+    const harness = await startServer((ws) =>
+      ws.close(1008, "Data access required"),
+    );
+    const socket = new TerminalSocket(harness.config, "jwt");
+    await socket.open();
+
+    await expect(socket.waitFor(["connected"], 2000)).rejects.toThrow(
+      "The server closed the connection: Data access required",
+    );
+    socket.close();
   });
 });

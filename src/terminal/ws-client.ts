@@ -38,6 +38,22 @@ export interface ConnectOptions {
 type MessageHandler = (message: ServerMessage) => void;
 
 /**
+ * Where the terminal socket lives, newest layout first.
+ *
+ * Termix 2.9 moved the terminal into the ssh-terminal plugin, which serves it
+ * under /plugin-ws/. Older servers serve it at /ssh/websocket/, a route 2.9
+ * removed. Trying the current path first means only an older server pays for
+ * a second handshake.
+ */
+export const TERMINAL_WEBSOCKET_PATHS = [
+  "/plugin-ws/ssh-terminal/terminal",
+  "/ssh/websocket/",
+];
+
+const LOGIN_HINT =
+  "The server rejected the connection. Your session may have expired: run `termix login`.";
+
+/**
  * Client for the Termix terminal WebSocket.
  *
  * The socket authenticates with a session JWT: the handlers verify it directly
@@ -65,23 +81,50 @@ export class TerminalSocket {
   ) {}
 
   async open(): Promise<void> {
-    const url = resolveWebSocketUrl(this.config, "/ssh/websocket/");
+    let unanswered: { error: Error; url: string } | undefined;
 
-    await new Promise<void>((resolve, reject) => {
+    for (const path of TERMINAL_WEBSOCKET_PATHS) {
+      const url = resolveWebSocketUrl(this.config, path);
+      try {
+        this.ws = await this.handshake(url);
+        break;
+      } catch (caught) {
+        const error = caught as Error;
+        // Refused, timed out or unauthorised would fail the same way at the
+        // other path, so only a server that answered without upgrading is
+        // worth asking again.
+        if (!isWrongPath(error)) throw new Error(handshakeMessage(error, url));
+        unanswered ??= { error, url };
+      }
+    }
+
+    if (!this.ws) {
+      // Neither layout answered. Report the current one, which is where a
+      // supported server serves the terminal.
+      throw new Error(handshakeMessage(unanswered!.error, unanswered!.url));
+    }
+
+    // The server drops idle sockets; a periodic ping keeps a session alive
+    // while the user is reading rather than typing.
+    this.pingTimer = setInterval(() => this.send("ping"), 30_000);
+    this.pingTimer.unref();
+  }
+
+  private handshake(url: string): Promise<WebSocket> {
+    return new Promise<WebSocket>((resolve, reject) => {
       const ws = new WebSocket(url, {
         headers: { Authorization: `Bearer ${this.token}` },
         rejectUnauthorized: !this.config.insecureTls,
         handshakeTimeout: this.config.requestTimeoutMs,
       });
-      this.ws = ws;
 
       const onOpen = (): void => {
         ws.off("error", onError);
-        resolve();
+        resolve(ws);
       };
       const onError = (error: Error): void => {
         ws.off("open", onOpen);
-        reject(new Error(handshakeMessage(error, url)));
+        reject(error);
       };
 
       ws.once("open", onOpen);
@@ -97,11 +140,6 @@ export class TerminalSocket {
         for (const handler of this.handlers) handler(message);
       });
     });
-
-    // The server drops idle sockets; a periodic ping keeps a session alive
-    // while the user is reading rather than typing.
-    this.pingTimer = setInterval(() => this.send("ping"), 30_000);
-    this.pingTimer.unref();
   }
 
   onMessage(handler: MessageHandler): () => void {
@@ -136,10 +174,10 @@ export class TerminalSocket {
         this.ws?.off("close", onClose);
       };
 
-      const onClose = (): void => {
+      const onClose = (code: number, reason: Buffer): void => {
         if (state.settled) return;
         cleanup();
-        reject(new Error("The server closed the connection."));
+        reject(new Error(closeMessage(code, reason.toString("utf8"))));
       };
 
       state.unsubscribe = this.onMessage((message) => {
@@ -213,19 +251,42 @@ function parseMessage(raw: WebSocket.RawData): ServerMessage | null {
 }
 
 /**
+ * The server answered the upgrade with an ordinary HTTP response, so it is up
+ * but serves nothing there: a route that does not exist on this version, or a
+ * proxy (Cloudflare answers 502) with nothing behind that path. A refused
+ * credential is not a wrong path.
+ */
+function isWrongPath(error: Error): boolean {
+  const match = /Unexpected server response: (\d{3})/.exec(error.message);
+  return match !== null && match[1] !== "401" && match[1] !== "403";
+}
+
+/**
  * The handshake fails with a bare "Unexpected server response: 401", which
  * says nothing about what to do, so translate the common cases.
  */
 function handshakeMessage(error: Error, url: string): string {
   const text = error.message;
   if (text.includes("401") || text.includes("403")) {
-    return "The server rejected the connection. Your session may have expired: run `termix login`.";
+    return LOGIN_HINT;
   }
   if (text.includes("ECONNREFUSED")) {
-    return `Could not reach the terminal service at ${url}. If you are connecting straight to a backend rather than through a proxy, set TERMIX_TERMINAL_URL.`;
+    return `Could not reach the terminal service at ${url}. If you are connecting straight to a backend older than Termix 2.9 rather than through a proxy, set TERMIX_TERMINAL_URL.`;
   }
   if (text.includes("404")) {
-    return `The terminal endpoint was not found at ${url}. If you are connecting straight to a backend, set TERMIX_TERMINAL_URL (default port 30002).`;
+    return `The terminal endpoint was not found at ${url}. If you are connecting straight to a backend older than Termix 2.9, set TERMIX_TERMINAL_URL (default port 30002).`;
   }
   return `Could not open the terminal connection: ${text}`;
+}
+
+/**
+ * Termix 2.9 accepts the upgrade and then closes with 1008 when the token is
+ * missing or expired, where older servers refused the handshake with a 401.
+ * Both mean the same thing to the user.
+ */
+function closeMessage(code: number, reason: string): string {
+  if (code === 1008 && reason === "Authentication required") return LOGIN_HINT;
+  return reason
+    ? `The server closed the connection: ${reason}`
+    : "The server closed the connection.";
 }
