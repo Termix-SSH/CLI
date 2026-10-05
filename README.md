@@ -34,12 +34,20 @@
 ## Installation
 
 ```bash
-npm install -g @termix-cli/cli
+npm install -g @termix-ssh/cli
 ```
 
 Requires Node.js 20.11 or newer. Standalone binaries for Windows, Linux and macOS
 that need no Node.js install are attached to each
 [release](https://github.com/Termix-SSH/CLI/releases).
+
+The package used to be published as `@termix-cli/cli`. If you have that one
+installed, swap it out:
+
+```bash
+npm uninstall -g @termix-cli/cli
+npm install -g @termix-ssh/cli
+```
 
 ## Documentation
 
