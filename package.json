@@ -1,6 +1,6 @@
 {
   "name": "@termix-ssh/cli",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Command-line interface for Termix. Manage SSH hosts, run commands, transfer files and open terminals from your shell.",
   "license": "Apache-2.0",
   "type": "module",
