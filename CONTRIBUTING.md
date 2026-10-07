@@ -145,4 +145,4 @@ file, so the generator never sees them. Those carry an `undocumented` note in
 
 ## Support
 
-To report a bug or request a feature, open a [support ticket](https://github.com/Termix-SSH/Support/issues/new/choose). Please be as detailed as possible, preferably in English. You can also ask in the [Discord](https://discord.gg/jVQGdvHDrf) server.
+Bugs and ideas for the CLI go in [this repo](https://github.com/Termix-SSH/CLI/issues/new/choose). Please be as detailed as possible, preferably in English. You can also ask in the [Discord](https://discord.gg/jVQGdvHDrf) server.
