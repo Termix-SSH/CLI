@@ -1,5 +1,7 @@
 # Contributing
 
+The Termix CLI is the command line client for [Termix](https://github.com/Termix-SSH/Termix), self-hosted, plugin-based server management.
+
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/en/download/) (v20.11 or newer)
@@ -87,8 +89,9 @@ npm run unlink:local   # when you are done
 picks up your changes without reinstalling. Use `npm run dev` in another
 terminal to rebuild on save.
 
-Against a bare backend rather than a reverse proxy, only the main API is on the
-configured port, so point the other services at theirs:
+Termix 2.9 and newer serve everything on one port, so `TERMIX_URL` is all you
+need. For an older backend reached without a reverse proxy, point the other
+services at their own ports:
 
 ```sh
 export TERMIX_URL=http://localhost:4090
@@ -122,27 +125,24 @@ A few routes are registered directly on the Express app rather than in a routes
 file, so the generator never sees them. Those carry an `undocumented` note in
 `endpoints.ts` and are verified by hand against the server source.
 
-## Contributing
+## Making a change
 
-1. **Fork the repository**: Click the "Fork" button at the top right of
-   the [repository page](https://github.com/Termix-SSH/CLI).
-2. **Create a new branch**:
+1. **Fork the repository**: Click "Fork" at the top right of the [repository page](https://github.com/Termix-SSH/CLI).
+2. **Create a branch**:
    ```sh
    git checkout -b feature/my-new-feature
    ```
-3. **Make your changes**: Implement your feature, fix, or improvement.
+3. **Make your changes**.
 4. **Commit your changes**:
    ```sh
-   git commit -m "Feature request my new feature"
+   git commit -m "feat: add my new feature"
    ```
 5. **Push to your fork**:
    ```sh
-   git push origin feature/my-feature-request
+   git push origin feature/my-new-feature
    ```
-6. **Open a pull request**: Go to the original repository and create a PR with a clear description.
+6. **Open a pull request** with a clear description.
 
 ## Support
 
-If you need help or want to request a feature with Termix, visit the [Issues](https://github.com/Termix-SSH/Support/issues) page, log in, and press `New Issue`.
-Please be as detailed as possible in your issue, preferably written in English. You can also join the [Discord](https://discord.gg/jVQGdvHDrf) server and visit the support
-channel, however, response times may be longer.
+To report a bug or request a feature, open a [support ticket](https://github.com/Termix-SSH/Support/issues/new/choose). Please be as detailed as possible, preferably in English. You can also ask in the [Discord](https://discord.gg/jVQGdvHDrf) server.

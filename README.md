@@ -20,6 +20,14 @@
 
 </div>
 
+<br />
+
+## Overview
+
+The Termix CLI talks to your [Termix](https://github.com/Termix-SSH/Termix) server, so you can use it from a terminal and in your own scripts. Commands for terminals, files, tunnels, Docker and fleets need the matching plugin turned on in Termix.
+
+<br />
+
 ## Features
 
 - Interactive SSH terminal with `termix ssh`, over the same connection the web UI uses
@@ -30,6 +38,8 @@
 - Host, credential and snippet management, with import and export
 - API keys and host enrollment for scripts, CI and AI agents
 - Table output on a terminal, JSON when piped, with documented exit codes
+
+<br />
 
 ## Installation
 
@@ -49,15 +59,11 @@ npm uninstall -g @termix-cli/cli
 npm install -g @termix-ssh/cli
 ```
 
+<br />
+
 ## Documentation
 
 Full documentation is at [docs.termix.site/cli](https://docs.termix.site/cli/).
-
-## Planned Features
-
-See [Projects](https://github.com/orgs/Termix-SSH/projects/5) for all planned features.
-If you are looking to contribute, see
-[Contributing](https://github.com/Termix-SSH/CLI/blob/main/CONTRIBUTING.md).
 
 <br />
 
