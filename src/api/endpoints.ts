@@ -3,8 +3,9 @@
  *
  * This is the anti-drift contract. The CLI once shipped against endpoints that
  * had moved, and nothing caught it; `test/drift.test.ts` now checks each entry
- * against the server's own OpenAPI specification, so a renamed or removed
- * route fails CI here instead of failing for a user.
+ * against the server's own OpenAPI specification (core, or the plugin that
+ * serves it), so a renamed or removed route fails CI here instead of failing
+ * for a user.
  *
  * Path parameters use the OpenAPI `{name}` form so they match the spec.
  */
@@ -13,14 +14,26 @@ export interface EndpointRef {
   path: string;
   /** Why the CLI calls it, for whoever has to fix a drift failure. */
   usedBy: string;
+  /** The plugin that serves it. Checked against `spec/plugins/<id>.json`. */
+  plugin?: string;
   /**
    * Set when the route exists but is absent from the specification, so the
-   * drift check skips it. The generator only scans the per-feature route
-   * directories, so routes registered directly on the Express app are never
-   * documented. Verified by hand against the server source.
+   * drift check skips it. Verified by hand against the server source.
    */
   undocumented?: string;
 }
+
+const plugin = (
+  id: string,
+  method: EndpointRef["method"],
+  sub: string,
+  usedBy: string,
+): EndpointRef => ({
+  method,
+  path: `/plugin-api/${id}${sub}`,
+  usedBy,
+  plugin: id,
+});
 
 export const ENDPOINTS: EndpointRef[] = [
   // Authentication
@@ -34,7 +47,7 @@ export const ENDPOINTS: EndpointRef[] = [
   {
     method: "get",
     path: "/host/db/host/{id}",
-    usedBy: "hosts get, ssh, files",
+    usedBy: "hosts get, ssh, files, tunnel",
   },
   { method: "put", path: "/host/db/host/{id}", usedBy: "hosts update" },
   { method: "delete", path: "/host/db/host/{id}", usedBy: "hosts delete" },
@@ -49,18 +62,6 @@ export const ENDPOINTS: EndpointRef[] = [
   { method: "put", path: "/credentials/{id}", usedBy: "credentials update" },
   { method: "delete", path: "/credentials/{id}", usedBy: "credentials delete" },
 
-  // Snippets, which also back `termix exec`
-  { method: "get", path: "/snippets", usedBy: "snippets list" },
-  { method: "post", path: "/snippets", usedBy: "snippets create, exec" },
-  { method: "put", path: "/snippets/{id}", usedBy: "snippets update" },
-  { method: "delete", path: "/snippets/{id}", usedBy: "snippets delete, exec" },
-  { method: "post", path: "/snippets/execute", usedBy: "snippets run, exec" },
-
-  // Alerts
-  { method: "get", path: "/alerts", usedBy: "alerts list" },
-  { method: "post", path: "/alerts/dismiss", usedBy: "alerts dismiss" },
-  { method: "delete", path: "/alerts/dismiss", usedBy: "alerts undismiss" },
-
   // Administration
   { method: "get", path: "/audit-logs", usedBy: "audit-logs" },
   { method: "get", path: "/users/list", usedBy: "users list" },
@@ -71,72 +72,6 @@ export const ENDPOINTS: EndpointRef[] = [
     path: "/users/api-keys/{keyId}",
     usedBy: "api-keys revoke",
   },
-
-  // Status and health
-  {
-    method: "get",
-    path: "/health",
-    usedBy: "version",
-    undocumented: "registered on the app in database.ts, not in a routes file",
-  },
-  {
-    method: "get",
-    path: "/version",
-    usedBy: "version",
-    undocumented: "registered on the app in database.ts, not in a routes file",
-  },
-  { method: "get", path: "/status", usedBy: "status" },
-  { method: "get", path: "/status/{id}", usedBy: "status <hostId>" },
-
-  // File manager
-  {
-    method: "post",
-    path: "/ssh/file_manager/ssh/connect",
-    usedBy: "files (session setup)",
-  },
-  {
-    method: "post",
-    path: "/ssh/file_manager/ssh/disconnect",
-    usedBy: "files (session teardown)",
-  },
-  {
-    method: "get",
-    path: "/ssh/file_manager/ssh/listFiles",
-    usedBy: "files ls",
-  },
-  {
-    method: "get",
-    path: "/ssh/file_manager/ssh/readFile",
-    usedBy: "files cat, get",
-  },
-  {
-    method: "post",
-    path: "/ssh/file_manager/ssh/writeFile",
-    usedBy: "files put",
-  },
-  {
-    method: "post",
-    path: "/ssh/file_manager/ssh/createFolder",
-    usedBy: "files mkdir",
-  },
-  {
-    method: "delete",
-    path: "/ssh/file_manager/ssh/deleteItem",
-    usedBy: "files rm",
-  },
-
-  // Fleets
-  { method: "get", path: "/fleets", usedBy: "fleets list" },
-  { method: "post", path: "/fleets", usedBy: "fleets create" },
-  { method: "delete", path: "/fleets/{id}", usedBy: "fleets delete" },
-  { method: "get", path: "/fleets/{id}/members", usedBy: "fleets members" },
-  { method: "post", path: "/fleets/{id}/members", usedBy: "fleets add-host" },
-  {
-    method: "delete",
-    path: "/fleets/{id}/members/{hostId}",
-    usedBy: "fleets remove-host",
-  },
-  { method: "post", path: "/fleets/{id}/execute", usedBy: "fleets exec" },
 
   // Sessions
   { method: "get", path: "/users/sessions", usedBy: "sessions list" },
@@ -151,57 +86,67 @@ export const ENDPOINTS: EndpointRef[] = [
     usedBy: "sessions revoke-all",
   },
 
+  // Status, health and plugins
+  { method: "get", path: "/health", usedBy: "version" },
+  { method: "get", path: "/version", usedBy: "version" },
+  { method: "get", path: "/plugins", usedBy: "plugins, feature checks" },
+  { method: "get", path: "/host/status", usedBy: "status" },
+  { method: "get", path: "/host/status/{id}", usedBy: "status <hostId>" },
+
+  // Snippets, which also back `termix exec`
+  plugin("snippets", "get", "", "snippets list"),
+  plugin("snippets", "post", "", "snippets create, exec"),
+  plugin("snippets", "put", "/{id}", "snippets update"),
+  plugin("snippets", "delete", "/{id}", "snippets delete, exec"),
+  plugin("snippets", "post", "/execute", "snippets run, exec"),
+
+  // Alerts
+  plugin("alerts", "get", "/items", "alerts list"),
+  plugin("alerts", "post", "/items/read", "alerts dismiss, undismiss"),
+  plugin("alerts", "delete", "/items/{id}", "alerts delete"),
+
+  // File manager
+  plugin("file-manager", "post", "/connect", "files (session setup)"),
+  plugin("file-manager", "post", "/connect-totp", "files (host 2FA)"),
+  plugin("file-manager", "post", "/disconnect", "files (session teardown)"),
+  plugin("file-manager", "get", "/listFiles", "files ls"),
+  plugin("file-manager", "get", "/readFile", "files cat, get"),
+  plugin("file-manager", "post", "/writeFile", "files put"),
+  plugin("file-manager", "post", "/createFolder", "files mkdir"),
+  plugin("file-manager", "delete", "/deleteItem", "files rm"),
+
+  // Fleets
+  plugin("fleets", "get", "", "fleets list"),
+  plugin("fleets", "post", "", "fleets create"),
+  plugin("fleets", "delete", "/{id}", "fleets delete"),
+  plugin("fleets", "get", "/{id}/members", "fleets members"),
+  plugin("fleets", "post", "/{id}/members", "fleets add-host"),
+  plugin("fleets", "delete", "/{id}/members/{hostId}", "fleets remove-host"),
+  plugin("fleets", "post", "/{id}/execute", "fleets exec"),
+
   // Tunnels
-  { method: "get", path: "/ssh/tunnel/status", usedBy: "tunnel list" },
-  { method: "post", path: "/ssh/tunnel/connect", usedBy: "tunnel start" },
-  { method: "post", path: "/ssh/tunnel/disconnect", usedBy: "tunnel stop" },
+  plugin("tunnels", "get", "/status", "tunnel list"),
+  plugin("tunnels", "get", "/status/{tunnelName}", "tunnel start (wait)"),
+  plugin("tunnels", "post", "/connect", "tunnel start"),
+  plugin("tunnels", "post", "/disconnect", "tunnel stop"),
 
   // Docker
-  {
-    method: "post",
-    path: "/docker/ssh/connect",
-    usedBy: "docker (session setup)",
-  },
-  {
-    method: "post",
-    path: "/docker/ssh/disconnect",
-    usedBy: "docker (session teardown)",
-  },
-  {
-    method: "get",
-    path: "/docker/containers/{sessionId}",
-    usedBy: "docker ps",
-  },
-  {
-    method: "get",
-    path: "/docker/containers/{sessionId}/{containerId}/logs",
-    usedBy: "docker logs",
-  },
-  {
-    method: "post",
-    path: "/docker/containers/{sessionId}/{containerId}/start",
-    usedBy: "docker start",
-  },
-  {
-    method: "post",
-    path: "/docker/containers/{sessionId}/{containerId}/stop",
-    usedBy: "docker stop",
-  },
-  {
-    method: "post",
-    path: "/docker/containers/{sessionId}/{containerId}/restart",
-    usedBy: "docker restart",
-  },
-  {
-    method: "post",
-    path: "/docker/containers/{sessionId}/{containerId}/pause",
-    usedBy: "docker pause",
-  },
-  {
-    method: "post",
-    path: "/docker/containers/{sessionId}/{containerId}/unpause",
-    usedBy: "docker unpause",
-  },
+  plugin("docker", "post", "/ssh/connect", "docker (session setup)"),
+  plugin("docker", "post", "/ssh/connect-totp", "docker (host 2FA)"),
+  plugin("docker", "post", "/ssh/disconnect", "docker (session teardown)"),
+  plugin("docker", "get", "/containers/{sessionId}", "docker ps"),
+  plugin(
+    "docker",
+    "get",
+    "/containers/{sessionId}/{containerId}/logs",
+    "docker logs",
+  ),
+  plugin(
+    "docker",
+    "post",
+    "/containers/{sessionId}/{containerId}/{action}",
+    "docker start, stop, restart, pause, unpause",
+  ),
 ];
 
 /**
@@ -211,10 +156,6 @@ export const ENDPOINTS: EndpointRef[] = [
 export const WEBSOCKET_ENDPOINTS = [
   {
     path: "/plugin-ws/ssh-terminal/terminal",
-    usedBy: "ssh (interactive terminal, Termix 2.9 and later)",
-  },
-  {
-    path: "/ssh/websocket/",
-    usedBy: "ssh (interactive terminal, before Termix 2.9)",
+    usedBy: "ssh (interactive terminal)",
   },
 ];

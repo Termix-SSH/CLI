@@ -8,6 +8,7 @@ import {
   type Column,
 } from "../core/output/index.js";
 import { parseId } from "./hosts.js";
+import { getServerPlugins, isPluginActive } from "../core/plugins.js";
 
 type Row = Record<string, unknown>;
 
@@ -58,12 +59,17 @@ export function registerMiscCommands(program: Command): void {
           })
           .catch(() => null);
 
+        const plugins = server
+          ? await getServerPlugins(client).catch(() => null)
+          : null;
+
         printRecord({
           cli: CLI_VERSION,
           url: config.url,
           health: health?.status ?? "unknown",
           server: server?.localVersion ?? null,
           serverStatus: server?.status ?? null,
+          plugins: plugins ? plugins.filter(isPluginActive).length : null,
         });
       });
     });
@@ -74,14 +80,10 @@ export function registerMiscCommands(program: Command): void {
     .action(async function (this: Command, hostId?: string) {
       await run(async () => {
         const { client } = await createContext(this);
-        const path = hostId ? `/status/${parseId(hostId)}` : "/status";
-        const data = await client.request<Row[] | Row>({
-          method: "GET",
-          path,
-          // Host status is served by the metrics app, which sits behind the
-          // same origin in a normal deployment but on its own port otherwise.
-          service: "metrics",
-        });
+        const path = hostId
+          ? `/host/status/${parseId(hostId)}`
+          : "/host/status";
+        const data = await client.request<Row[] | Row>({ method: "GET", path });
 
         // A single host returns one record.
         if (hostId) {

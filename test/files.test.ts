@@ -1,5 +1,36 @@
 import { describe, it, expect } from "vitest";
-import { parseRemote } from "../src/commands/files.js";
+import {
+  decodeDownload,
+  encodeUpload,
+  parseRemote,
+} from "../src/commands/files.js";
+
+describe("file content encoding", () => {
+  it("sends text as text", () => {
+    expect(encodeUpload(Buffer.from("hello\n"))).toEqual({
+      content: "hello\n",
+    });
+  });
+
+  it("sends binary as base64", () => {
+    const data = Buffer.from([0x89, 0x50, 0x00, 0xff]);
+    expect(encodeUpload(data)).toEqual({
+      content: data.toString("base64"),
+      encoding: "base64",
+    });
+  });
+
+  it("decodes what the file manager sends back", () => {
+    const data = Buffer.from([1, 2, 0, 255]);
+    expect(
+      decodeDownload({ content: data.toString("base64"), encoding: "base64" }),
+    ).toEqual(data);
+    expect(decodeDownload({ content: "hi", encoding: "utf8" }).toString()).toBe(
+      "hi",
+    );
+    expect(decodeDownload(undefined).length).toBe(0);
+  });
+});
 
 describe("parseRemote", () => {
   it("splits HOST_ID:/path into its parts", () => {

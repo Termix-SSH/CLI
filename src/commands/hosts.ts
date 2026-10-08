@@ -11,6 +11,7 @@ import {
 } from "../core/output/index.js";
 import {
   addHostFieldOptions,
+  applyHostToggles,
   buildHostPayload,
   type HostFieldOpts,
 } from "./host-fields.js";
@@ -159,6 +160,7 @@ export function registerHostCommands(program: Command): void {
         path: "/host/db/host",
         data: payload,
       });
+      await applyHostToggles(client, Number(created.id), opts);
       printResult(`Created host ${created.id}.`, {
         id: created.id,
         name: created.name,
@@ -197,6 +199,7 @@ export function registerHostCommands(program: Command): void {
         path: `/host/db/host/${id}`,
         data: merged,
       });
+      await applyHostToggles(client, id, opts);
 
       // Re-read rather than trusting the request body: the server normalises
       // some fields, so echoing what we sent could report a name it rejected.

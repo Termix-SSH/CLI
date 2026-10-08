@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import type { Command } from "commander";
-import { UsageError } from "../core/errors.js";
+import { TermixApiError, UsageError } from "../core/errors.js";
+import type { TermixClient } from "../core/http.js";
+import { printWarning } from "../core/output/index.js";
+import { FEATURES } from "../api/features.js";
 
 /** Options shared by `hosts create` and `hosts update`. */
 export interface HostFieldOpts {
@@ -115,6 +118,54 @@ export function buildHostPayload(opts: HostFieldOpts): Record<string, unknown> {
   if (opts.enableTunnel !== undefined) body.enableTunnel = opts.enableTunnel;
 
   return body;
+}
+
+/**
+ * Since Termix 2.9 these per-host switches are each plugin's own host
+ * settings, which the host routes ignore.
+ */
+const HOST_TOGGLES = [
+  { flag: "enableTerminal", feature: "terminal" },
+  { flag: "enableFileManager", feature: "files" },
+  { flag: "enableDocker", feature: "docker" },
+  { flag: "enableTunnel", feature: "tunnels" },
+] as const;
+
+/** The plugin host settings to write for the --enable-* flags passed. */
+export function hostToggleSettings(
+  opts: HostFieldOpts,
+): Array<{ pluginId: string; settings: Record<string, boolean> }> {
+  return HOST_TOGGLES.filter(({ flag }) => opts[flag] !== undefined).map(
+    ({ flag, feature }) => ({
+      pluginId: FEATURES[feature].pluginId,
+      settings: { [flag]: opts[flag] as boolean },
+    }),
+  );
+}
+
+/** Write the --enable-* flags to their plugins' settings for a host. */
+export async function applyHostToggles(
+  client: TermixClient,
+  hostId: number,
+  opts: HostFieldOpts,
+): Promise<void> {
+  for (const { pluginId, settings } of hostToggleSettings(opts)) {
+    try {
+      await client.request({
+        method: "PUT",
+        path: `/plugins/${pluginId}/settings/host/${hostId}`,
+        data: settings,
+      });
+    } catch (error) {
+      if (error instanceof TermixApiError && error.status === 404) {
+        printWarning(
+          `Skipped ${Object.keys(settings)[0]}: the "${pluginId}" plugin is not installed on this server.`,
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 function parsePort(value: string): number {

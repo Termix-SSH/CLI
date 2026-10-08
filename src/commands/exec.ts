@@ -5,6 +5,7 @@ import type { TermixClient } from "../core/http.js";
 import { ExitCode } from "../core/errors.js";
 import { fail } from "../core/output/index.js";
 import { parseId } from "./hosts.js";
+import { pluginPath } from "../api/features.js";
 
 const EXIT_MARKER = "__TERMIX_EXIT=";
 
@@ -56,7 +57,7 @@ async function executeOnHost(
 ): Promise<SnippetExecuteResponse> {
   const created = await client.request<{ id: number }>({
     method: "POST",
-    path: "/snippets",
+    path: pluginPath("snippets"),
     data: {
       name,
       content,
@@ -68,7 +69,7 @@ async function executeOnHost(
     try {
       await client.request({
         method: "DELETE",
-        path: `/snippets/${created.id}`,
+        path: pluginPath("snippets", `/${created.id}`),
       });
     } catch {
       process.stderr.write(
@@ -87,7 +88,7 @@ async function executeOnHost(
   try {
     return await client.request<SnippetExecuteResponse>({
       method: "POST",
-      path: "/snippets/execute",
+      path: pluginPath("snippets", "/execute"),
       data: { snippetId: created.id, hostId },
     });
   } finally {
@@ -112,7 +113,8 @@ export function registerExecCommands(program: Command): void {
       try {
         const hostId = parseId(hostIdArg);
         const command = commandParts.join(" ");
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("snippets");
 
         const result = await executeOnHost(
           client,

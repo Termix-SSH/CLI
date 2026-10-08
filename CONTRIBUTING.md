@@ -4,7 +4,7 @@ The Termix CLI is the command line client for [Termix](https://github.com/Termix
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/en/download/) (v20.11 or newer)
+- [Node.js](https://nodejs.org/en/download/) (v22.12 or newer)
 - [NPM](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)
 - [Git](https://git-scm.com/downloads)
 

@@ -11,6 +11,7 @@ import {
   type Column,
 } from "../core/output/index.js";
 import { parseId } from "./hosts.js";
+import { pluginPath } from "../api/features.js";
 
 type Row = Record<string, unknown>;
 
@@ -49,10 +50,11 @@ export function registerFleetCommands(program: Command): void {
     .description("List fleets.")
     .action(async function (this: Command) {
       await run(async () => {
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("fleets");
         const data = await client.request<Row[] | { fleets?: Row[] }>({
           method: "GET",
-          path: "/fleets",
+          path: pluginPath("fleets"),
         });
         printList(toRows(data, "fleets"), FLEET_COLUMNS);
       });
@@ -64,10 +66,11 @@ export function registerFleetCommands(program: Command): void {
     .action(async function (this: Command, fleetId: string) {
       await run(async () => {
         const id = parseId(fleetId, "fleet id");
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("fleets");
         const data = await client.request<Row[] | { members?: Row[] }>({
           method: "GET",
-          path: `/fleets/${id}/members`,
+          path: pluginPath("fleets", `/${id}/members`),
         });
         printList(toRows(data, "members"), MEMBER_COLUMNS);
       });
@@ -83,10 +86,11 @@ export function registerFleetCommands(program: Command): void {
       opts: { name: string; description?: string },
     ) {
       await run(async () => {
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("fleets");
         const created = await client.request<Row>({
           method: "POST",
-          path: "/fleets",
+          path: pluginPath("fleets"),
           data: { name: opts.name, description: opts.description },
         });
         printResult(`Created fleet ${created.id}.`, {
@@ -102,8 +106,12 @@ export function registerFleetCommands(program: Command): void {
     .action(async function (this: Command, fleetId: string) {
       await run(async () => {
         const id = parseId(fleetId, "fleet id");
-        const { client } = await createContext(this);
-        await client.request({ method: "DELETE", path: `/fleets/${id}` });
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("fleets");
+        await client.request({
+          method: "DELETE",
+          path: pluginPath("fleets", `/${id}`),
+        });
         printResult(`Deleted fleet ${id}.`, { id });
       });
     });
@@ -115,10 +123,11 @@ export function registerFleetCommands(program: Command): void {
       await run(async () => {
         const fleet = parseId(fleetId, "fleet id");
         const host = parseId(hostId, "host id");
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("fleets");
         await client.request({
           method: "POST",
-          path: `/fleets/${fleet}/members`,
+          path: pluginPath("fleets", `/${fleet}/members`),
           data: { hostId: host },
         });
         printResult(`Added host ${host} to fleet ${fleet}.`, { id: host });
@@ -132,10 +141,11 @@ export function registerFleetCommands(program: Command): void {
       await run(async () => {
         const fleet = parseId(fleetId, "fleet id");
         const host = parseId(hostId, "host id");
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("fleets");
         await client.request({
           method: "DELETE",
-          path: `/fleets/${fleet}/members/${host}`,
+          path: pluginPath("fleets", `/${fleet}/members/${host}`),
         });
         printResult(`Removed host ${host} from fleet ${fleet}.`, { id: host });
       });
@@ -158,10 +168,11 @@ export function registerFleetCommands(program: Command): void {
           throw new UsageError("A command is required.");
         }
 
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("fleets");
         const data = await client.request<{ results?: ExecuteResult[] }>({
           method: "POST",
-          path: `/fleets/${id}/execute`,
+          path: pluginPath("fleets", `/${id}/execute`),
           data: { command },
         });
 

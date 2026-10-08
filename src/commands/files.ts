@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { isUtf8 } from "node:buffer";
 import type { Command } from "commander";
 import { createContext } from "../core/context.js";
 import type { TermixClient } from "../core/http.js";
-import { UsageError } from "../core/errors.js";
+import { TermixApiError, UsageError } from "../core/errors.js";
+import { openSshSession } from "../core/ssh-connect.js";
+import { pluginPath } from "../api/features.js";
 import {
   printList,
   printResult,
@@ -37,12 +40,33 @@ const FILE_COLUMNS: Column<FileEntry>[] = [
   { header: "permissions", value: (f) => f.permissions },
 ];
 
+/** Upload body for a local file: text as-is, anything else as base64. */
+export function encodeUpload(data: Buffer): {
+  content: string;
+  encoding?: "base64";
+} {
+  if (isUtf8(data) && !data.includes(0))
+    return { content: data.toString("utf8") };
+  return { content: data.toString("base64"), encoding: "base64" };
+}
+
+/** The file manager sends binary files as base64 and says so. */
+export function decodeDownload(
+  data: { content?: string; encoding?: string } | string | undefined,
+): Buffer {
+  if (typeof data === "string") return Buffer.from(data, "utf8");
+  const content = data?.content ?? "";
+  return data?.encoding === "base64"
+    ? Buffer.from(content, "base64")
+    : Buffer.from(content, "utf8");
+}
+
 /**
- * An SFTP session on a host.
+ * An SFTP session on a host, through the file-manager plugin.
  *
- * The file-manager API is session-oriented: connect once, operate against the
- * session id, then disconnect. The id is generated client-side, and the server
- * ties it to the authenticated user.
+ * The API is session-oriented: connect once, operate against the session id,
+ * then disconnect. The id is generated client-side, and the server ties it to
+ * the authenticated user.
  */
 class SftpSession {
   private constructor(
@@ -65,11 +89,14 @@ class SftpSession {
     }
 
     const sessionId = `cli-${randomUUID()}`;
-    const result = await client.request<{ requiresTOTP?: boolean }>({
-      method: "POST",
-      path: "/ssh/file_manager/ssh/connect",
-      service: "files",
-      data: {
+    await openSshSession({
+      client,
+      hostId,
+      sessionId,
+      connectPath: pluginPath("files", "/connect"),
+      totpPath: pluginPath("files", "/connect-totp"),
+      passphraseField: "keyPassword",
+      body: {
         sessionId,
         hostId,
         ip: host.ip,
@@ -80,12 +107,6 @@ class SftpSession {
       },
     });
 
-    if (result?.requiresTOTP) {
-      throw new UsageError(
-        "This host needs two-factor confirmation, which the file commands cannot prompt for. Use the web UI or `termix ssh`.",
-      );
-    }
-
     return new SftpSession(client, sessionId);
   }
 
@@ -94,39 +115,40 @@ class SftpSession {
       FileEntry[] | { files?: FileEntry[] }
     >({
       method: "GET",
-      path: "/ssh/file_manager/ssh/listFiles",
-      service: "files",
+      path: pluginPath("files", "/listFiles"),
       params: { sessionId: this.sessionId, path: remotePath },
     });
     if (Array.isArray(data)) return data;
     return data?.files ?? [];
   }
 
-  async read(remotePath: string): Promise<string> {
-    const data = await this.client.request<{ content?: string } | string>({
+  async read(remotePath: string): Promise<Buffer> {
+    const data = await this.client.request<
+      { content?: string; encoding?: string } | string
+    >({
       method: "GET",
-      path: "/ssh/file_manager/ssh/readFile",
-      service: "files",
+      path: pluginPath("files", "/readFile"),
       params: { sessionId: this.sessionId, path: remotePath },
     });
-    if (typeof data === "string") return data;
-    return data?.content ?? "";
+    return decodeDownload(data);
   }
 
-  async write(remotePath: string, content: string): Promise<void> {
+  async write(remotePath: string, data: Buffer): Promise<void> {
     await this.client.request({
       method: "POST",
-      path: "/ssh/file_manager/ssh/writeFile",
-      service: "files",
-      data: { sessionId: this.sessionId, path: remotePath, content },
+      path: pluginPath("files", "/writeFile"),
+      data: {
+        sessionId: this.sessionId,
+        path: remotePath,
+        ...encodeUpload(data),
+      },
     });
   }
 
   async mkdir(remotePath: string): Promise<void> {
     await this.client.request({
       method: "POST",
-      path: "/ssh/file_manager/ssh/createFolder",
-      service: "files",
+      path: pluginPath("files", "/createFolder"),
       data: {
         sessionId: this.sessionId,
         path: path.posix.dirname(remotePath),
@@ -135,25 +157,37 @@ class SftpSession {
     });
   }
 
-  async remove(remotePath: string, isDirectory: boolean): Promise<void> {
-    await this.client.request({
-      method: "DELETE",
-      path: "/ssh/file_manager/ssh/deleteItem",
-      service: "files",
-      data: {
-        sessionId: this.sessionId,
-        path: remotePath,
-        isDirectory,
-      },
-    });
+  async remove(
+    remotePath: string,
+    isDirectory: boolean,
+    toTrash: boolean,
+  ): Promise<void> {
+    try {
+      await this.client.request({
+        method: "DELETE",
+        path: pluginPath("files", "/deleteItem"),
+        data: {
+          sessionId: this.sessionId,
+          path: remotePath,
+          isDirectory,
+          permanent: !toTrash,
+        },
+      });
+    } catch (error) {
+      if (toTrash && error instanceof TermixApiError && error.status === 409) {
+        throw new Error(
+          `Could not move ${remotePath} to the trash (${error.message}), so it was not deleted. Run without --trash to delete it for good.`,
+        );
+      }
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
     try {
       await this.client.request({
         method: "POST",
-        path: "/ssh/file_manager/ssh/disconnect",
-        service: "files",
+        path: pluginPath("files", "/disconnect"),
         data: { sessionId: this.sessionId },
       });
     } catch {
@@ -218,7 +252,8 @@ export function registerFileCommands(program: Command): void {
     .action(async function (this: Command, remote: string) {
       await run(async () => {
         const { hostId, path: remotePath } = parseRemote(remote);
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("files");
         const entries = await withSession(client, hostId, (session) =>
           session.list(remotePath),
         );
@@ -232,7 +267,8 @@ export function registerFileCommands(program: Command): void {
     .action(async function (this: Command, remote: string) {
       await run(async () => {
         const { hostId, path: remotePath } = parseRemote(remote);
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("files");
         const content = await withSession(client, hostId, (session) =>
           session.read(remotePath),
         );
@@ -247,13 +283,14 @@ export function registerFileCommands(program: Command): void {
     .action(async function (this: Command, remote: string, localPath?: string) {
       await run(async () => {
         const { hostId, path: remotePath } = parseRemote(remote);
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("files");
         const content = await withSession(client, hostId, (session) =>
           session.read(remotePath),
         );
 
         const target = resolveLocalTarget(localPath, remotePath);
-        fs.writeFileSync(target, content, "utf8");
+        fs.writeFileSync(target, content);
         printResult(`Downloaded ${remotePath} to ${target}.`, { path: target });
       });
     });
@@ -264,14 +301,15 @@ export function registerFileCommands(program: Command): void {
     .action(async function (this: Command, localPath: string, remote: string) {
       await run(async () => {
         const { hostId, path: remotePath } = parseRemote(remote);
-        let content: string;
+        let content: Buffer;
         try {
-          content = fs.readFileSync(localPath, "utf8");
+          content = fs.readFileSync(localPath);
         } catch {
           throw new UsageError(`Could not read local file: ${localPath}`);
         }
 
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("files");
         await withSession(client, hostId, (session) =>
           session.write(remotePath, content),
         );
@@ -287,7 +325,8 @@ export function registerFileCommands(program: Command): void {
     .action(async function (this: Command, remote: string) {
       await run(async () => {
         const { hostId, path: remotePath } = parseRemote(remote);
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("files");
         await withSession(client, hostId, (session) =>
           session.mkdir(remotePath),
         );
@@ -299,18 +338,29 @@ export function registerFileCommands(program: Command): void {
     .command("rm <remote>")
     .description("Delete a remote file, or a directory with --recursive.")
     .option("-r, --recursive", "Delete a directory and its contents")
+    .option("--trash", "Move it to the server's trash instead of deleting it")
     .action(async function (
       this: Command,
       remote: string,
-      opts: { recursive?: boolean },
+      opts: { recursive?: boolean; trash?: boolean },
     ) {
       await run(async () => {
         const { hostId, path: remotePath } = parseRemote(remote);
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("files");
         await withSession(client, hostId, (session) =>
-          session.remove(remotePath, opts.recursive === true),
+          session.remove(
+            remotePath,
+            opts.recursive === true,
+            opts.trash === true,
+          ),
         );
-        printResult(`Deleted ${remotePath}.`, { path: remotePath });
+        printResult(
+          opts.trash
+            ? `Moved ${remotePath} to the trash.`
+            : `Deleted ${remotePath}.`,
+          { path: remotePath, trashed: opts.trash === true },
+        );
       });
     });
 }

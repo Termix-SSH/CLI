@@ -9,6 +9,9 @@ import {
   type Column,
 } from "../core/output/index.js";
 import { parseId } from "./hosts.js";
+import { pluginPath } from "../api/features.js";
+import { TermixApiError } from "../core/errors.js";
+import { openSshSession } from "../core/ssh-connect.js";
 
 type ContainerRow = Record<string, unknown>;
 
@@ -21,8 +24,8 @@ const CONTAINER_COLUMNS: Column<ContainerRow>[] = [
 ];
 
 /**
- * The Docker API is session-oriented like the file manager: connect over SSH
- * to get a session id, then act against it.
+ * The Docker plugin is session-oriented like the file manager: connect over
+ * SSH to get a session id, then act against it.
  */
 async function withDockerSession<T>(
   client: TermixClient,
@@ -30,19 +33,30 @@ async function withDockerSession<T>(
   fn: (sessionId: string) => Promise<T>,
 ): Promise<T> {
   const sessionId = `cli-${randomUUID()}`;
-  await client.request({
-    method: "POST",
-    path: "/docker/ssh/connect",
-    service: "docker",
-    data: { sessionId, hostId },
-  });
+  try {
+    await openSshSession({
+      client,
+      hostId,
+      sessionId,
+      connectPath: pluginPath("docker", "/ssh/connect"),
+      totpPath: pluginPath("docker", "/ssh/connect-totp"),
+      passphraseField: "userProvidedKeyPassword",
+      body: { sessionId, hostId },
+    });
+  } catch (error) {
+    if (error instanceof TermixApiError && error.code === "DOCKER_DISABLED") {
+      throw new Error(
+        `Docker is turned off for host ${hostId}. Turn it on in the host's Docker settings.`,
+      );
+    }
+    throw error;
+  }
 
   const disconnect = async (): Promise<void> => {
     try {
       await client.request({
         method: "POST",
-        path: "/docker/ssh/disconnect",
-        service: "docker",
+        path: pluginPath("docker", "/ssh/disconnect"),
         data: { sessionId },
       });
     } catch {
@@ -77,7 +91,8 @@ export function registerDockerCommands(program: Command): void {
     .action(async function (this: Command, hostIdArg: string) {
       await run(async () => {
         const hostId = parseId(hostIdArg);
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("docker");
 
         const containers = await withDockerSession(
           client,
@@ -85,8 +100,7 @@ export function registerDockerCommands(program: Command): void {
           (sessionId) =>
             client.request<ContainerRow[] | { containers?: ContainerRow[] }>({
               method: "GET",
-              path: `/docker/containers/${sessionId}`,
-              service: "docker",
+              path: pluginPath("docker", `/containers/${sessionId}`),
             }),
         );
 
@@ -109,13 +123,16 @@ export function registerDockerCommands(program: Command): void {
     ) {
       await run(async () => {
         const hostId = parseId(hostIdArg);
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("docker");
 
         const logs = await withDockerSession(client, hostId, (sessionId) =>
           client.request<{ logs?: string } | string>({
             method: "GET",
-            path: `/docker/containers/${sessionId}/${encodeURIComponent(containerId)}/logs`,
-            service: "docker",
+            path: pluginPath(
+              "docker",
+              `/containers/${sessionId}/${encodeURIComponent(containerId)}/logs`,
+            ),
             params: opts.tail ? { tail: opts.tail } : undefined,
           }),
         );
@@ -138,13 +155,16 @@ export function registerDockerCommands(program: Command): void {
       ) {
         await run(async () => {
           const hostId = parseId(hostIdArg);
-          const { client } = await createContext(this);
+          const { client, requireFeature } = await createContext(this);
+          await requireFeature("docker");
 
           await withDockerSession(client, hostId, (sessionId) =>
             client.request({
               method: "POST",
-              path: `/docker/containers/${sessionId}/${encodeURIComponent(containerId)}/${action}`,
-              service: "docker",
+              path: pluginPath(
+                "docker",
+                `/containers/${sessionId}/${encodeURIComponent(containerId)}/${action}`,
+              ),
             }),
           );
           printResult(`Sent ${action} to ${containerId}.`, {

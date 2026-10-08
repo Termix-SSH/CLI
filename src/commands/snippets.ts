@@ -10,6 +10,7 @@ import {
   type Column,
 } from "../core/output/index.js";
 import { parseId } from "./hosts.js";
+import { pluginPath } from "../api/features.js";
 import { parseExecOutput, type SnippetExecuteResponse } from "./exec.js";
 
 type SnippetRow = Record<string, unknown>;
@@ -66,10 +67,11 @@ export function registerSnippetCommands(program: Command): void {
     .description("List saved snippets.")
     .action(async function (this: Command) {
       await run(async () => {
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("snippets");
         const all = await client.request<SnippetRow[]>({
           method: "GET",
-          path: "/snippets",
+          path: pluginPath("snippets"),
         });
         printList(all, SNIPPET_COLUMNS, {
           jsonWrapper: (rows) => ({ count: rows.length, snippets: rows }),
@@ -100,10 +102,11 @@ export function registerSnippetCommands(program: Command): void {
         if (!content) {
           throw new UsageError("Provide --content or --content-file.");
         }
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("snippets");
         const created = await client.request<SnippetRow>({
           method: "POST",
-          path: "/snippets",
+          path: pluginPath("snippets"),
           data: {
             name: opts.name,
             content,
@@ -152,10 +155,11 @@ export function registerSnippetCommands(program: Command): void {
         }
 
         const id = parseId(snippetId);
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("snippets");
         await client.request({
           method: "PUT",
-          path: `/snippets/${id}`,
+          path: pluginPath("snippets", `/${id}`),
           data: body,
         });
         printResult(`Updated snippet ${id}.`, { id });
@@ -168,8 +172,12 @@ export function registerSnippetCommands(program: Command): void {
     .action(async function (this: Command, snippetId: string) {
       await run(async () => {
         const id = parseId(snippetId);
-        const { client } = await createContext(this);
-        await client.request({ method: "DELETE", path: `/snippets/${id}` });
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("snippets");
+        await client.request({
+          method: "DELETE",
+          path: pluginPath("snippets", `/${id}`),
+        });
         printResult(`Deleted snippet ${id}.`, { id });
       });
     });
@@ -195,11 +203,12 @@ export function registerSnippetCommands(program: Command): void {
       try {
         const snippetId = parseId(snippetIdArg);
         const hostId = parseId(opts.host, "--host");
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("snippets");
 
         const result = await client.request<SnippetExecuteResponse>({
           method: "POST",
-          path: "/snippets/execute",
+          path: pluginPath("snippets", "/execute"),
           data: {
             snippetId,
             hostId,

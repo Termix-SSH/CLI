@@ -1,6 +1,8 @@
 import type { Command } from "commander";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createContext } from "../core/context.js";
-import { UsageError } from "../core/errors.js";
+import type { TermixClient } from "../core/http.js";
+import { TermixApiError, UsageError } from "../core/errors.js";
 import {
   printList,
   printResult,
@@ -8,6 +10,7 @@ import {
   type Column,
 } from "../core/output/index.js";
 import { parseId } from "./hosts.js";
+import { pluginPath } from "../api/features.js";
 
 type StatusRow = Record<string, unknown>;
 
@@ -19,54 +22,81 @@ const TUNNEL_COLUMNS: Column<StatusRow>[] = [
   { header: "host", value: (t) => t.sourceHostId, align: "right" },
 ];
 
-interface TunnelConnection {
+export interface TunnelConnection {
   sourcePort?: number | string;
   endpointPort?: number | string;
   endpointHost?: string;
   endpointIP?: string;
-  name?: string;
+  scope?: string;
+  mode?: string;
+  tunnelType?: string;
+  bindHost?: string;
+  targetHost?: string;
+  maxRetries?: number;
+  retryInterval?: number;
+  autoStart?: boolean;
   [key: string]: unknown;
 }
 
-interface HostRecord {
-  id?: number;
+export interface HostRecord {
+  id: number;
   name?: string;
   ip?: string;
-  port?: number;
   username?: string;
-  authType?: string;
-  credentialId?: number;
+  pluginSettings?: Record<string, Record<string, unknown> | undefined>;
+  /** Where Termix kept tunnels before they became a plugin. */
   tunnelConnections?: TunnelConnection[] | string;
 }
 
 /**
- * Tunnel names encode their own configuration as
- * `hostId::index::name::sourcePort::endpointHost::endpointPort`, and the
- * server rejects a config that disagrees with its name. Building it here keeps
- * the two in step.
+ * A saved tunnel's name encodes its own configuration as
+ * `hostId::index::hostLabel::sourcePort::endpointHost::endpointPort`, and the
+ * server rejects a config that disagrees with its name. The label is the
+ * host's name (or user@ip), the same as the web UI, so a tunnel started here
+ * shows up as the same tunnel there.
  */
-function buildTunnelName(
-  hostId: number,
+export function buildTunnelName(
+  host: HostRecord,
   index: number,
-  displayName: string,
-  sourcePort: string | number,
-  endpointHost: string,
-  endpointPort: string | number,
+  connection: TunnelConnection,
 ): string {
+  const label = host.name || `${host.username ?? ""}@${host.ip ?? ""}`;
   return [
-    hostId,
+    host.id,
     index,
-    displayName,
-    sourcePort,
-    endpointHost,
-    endpointPort,
+    label,
+    connection.sourcePort ?? "",
+    endpointHostOf(connection),
+    connection.endpointPort ?? 0,
   ].join("::");
 }
 
-/** tunnelConnections is stored as JSON, and may arrive as a string. */
-function parseConnections(host: HostRecord): TunnelConnection[] {
-  const raw = host.tunnelConnections;
-  if (Array.isArray(raw)) return raw;
+/** Split a saved tunnel's name back into its parts, for `tunnel list`. */
+export function parseTunnelName(name: string): Record<string, unknown> {
+  const parts = name.split("::");
+  if (parts.length !== 6) return {};
+  const [hostId, index, label, sourcePort, endpointHost, endpointPort] = parts;
+  return {
+    sourceHostId: Number(hostId),
+    tunnelIndex: Number(index),
+    hostLabel: label,
+    sourcePort,
+    endpointHost,
+    endpointPort,
+  };
+}
+
+function endpointHostOf(connection: TunnelConnection): string {
+  return (connection.endpointHost ?? connection.endpointIP ?? "").trim();
+}
+
+/** Saved tunnels live in the tunnels plugin's host settings. */
+export function parseConnections(
+  host: Omit<HostRecord, "id">,
+): TunnelConnection[] {
+  const raw =
+    host.pluginSettings?.tunnels?.tunnelConnections ?? host.tunnelConnections;
+  if (Array.isArray(raw)) return raw as TunnelConnection[];
   if (typeof raw === "string" && raw.trim()) {
     try {
       const parsed = JSON.parse(raw);
@@ -76,6 +106,76 @@ function parseConnections(host: HostRecord): TunnelConnection[] {
     }
   }
   return [];
+}
+
+function tunnelMode(connection: TunnelConnection): string {
+  return connection.mode ?? connection.tunnelType ?? "local";
+}
+
+/** What POST /connect takes for a host's saved tunnel, matching the web UI. */
+export function connectRequestFor(
+  host: HostRecord,
+  index: number,
+  connection: TunnelConnection,
+): Record<string, unknown> {
+  const mode = tunnelMode(connection);
+  return {
+    name: buildTunnelName(host, index, connection),
+    sourceHostId: host.id,
+    tunnelIndex: index,
+    scope: connection.scope ?? "s2s",
+    mode,
+    tunnelType: mode === "remote" ? "remote" : "local",
+    bindHost: connection.bindHost,
+    targetHost: connection.targetHost,
+    endpointHost: endpointHostOf(connection),
+    sourcePort: connection.sourcePort,
+    endpointPort: connection.endpointPort ?? 0,
+    maxRetries: connection.maxRetries,
+    retryInterval: connection.retryInterval,
+    autoStart: connection.autoStart,
+  };
+}
+
+const SETTLED = new Set(["connected", "failed", "disconnected"]);
+const START_WAIT_MS = 15_000;
+
+/**
+ * POST /connect answers before the tunnel is up, so poll its status for a
+ * short while to report how it went.
+ */
+async function waitForTunnel(
+  client: TermixClient,
+  name: string,
+): Promise<StatusRow | null> {
+  const deadline = Date.now() + START_WAIT_MS;
+  let last: StatusRow | null = null;
+  while (Date.now() < deadline) {
+    await sleep(500);
+    try {
+      const data = await client.request<{ status?: StatusRow }>({
+        method: "GET",
+        path: pluginPath("tunnels", `/status/${encodeURIComponent(name)}`),
+      });
+      last = data?.status ?? null;
+    } catch (error) {
+      if (error instanceof TermixApiError && error.status === 404) continue;
+      throw error;
+    }
+    if (last && SETTLED.has(String(last.status))) return last;
+  }
+  return last;
+}
+
+async function loadHost(
+  client: TermixClient,
+  hostId: number,
+): Promise<HostRecord> {
+  const host = await client.request<Omit<HostRecord, "id">>({
+    method: "GET",
+    path: `/host/db/host/${hostId}`,
+  });
+  return { ...host, id: hostId };
 }
 
 export function registerTunnelCommands(program: Command): void {
@@ -88,16 +188,17 @@ export function registerTunnelCommands(program: Command): void {
     .description("Show the status of every tunnel.")
     .action(async function (this: Command) {
       await run(async () => {
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("tunnels");
         const data = await client.request<Record<string, StatusRow>>({
           method: "GET",
-          path: "/ssh/tunnel/status",
-          service: "tunnel",
+          path: pluginPath("tunnels", "/status"),
         });
 
-        // The API returns a map keyed by tunnel name, not an array.
+        // A map keyed by tunnel name, and the name carries the ports.
         const rows = Object.entries(data ?? {}).map(([name, value]) => ({
           name,
+          ...parseTunnelName(name),
           ...value,
         }));
         printList(rows, TUNNEL_COLUMNS, { quietField: "name" });
@@ -110,17 +211,16 @@ export function registerTunnelCommands(program: Command): void {
     .action(async function (this: Command, hostIdArg: string) {
       await run(async () => {
         const hostId = parseId(hostIdArg);
-        const { client } = await createContext(this);
-        const host = await client.request<HostRecord>({
-          method: "GET",
-          path: `/host/db/host/${hostId}`,
-        });
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("tunnels");
+        const host = await loadHost(client, hostId);
 
         const rows = parseConnections(host).map((connection, index) => ({
           index,
-          name: connection.name ?? `tunnel-${index}`,
+          name: buildTunnelName(host, index, connection),
+          mode: tunnelMode(connection),
           sourcePort: connection.sourcePort,
-          endpointHost: connection.endpointHost ?? connection.endpointIP,
+          endpointHost: endpointHostOf(connection),
           endpointPort: connection.endpointPort,
         }));
 
@@ -128,7 +228,7 @@ export function registerTunnelCommands(program: Command): void {
           rows,
           [
             { header: "index", value: (r) => r.index, align: "right" },
-            { header: "name", value: (r) => r.name },
+            { header: "mode", value: (r) => r.mode },
             { header: "source", value: (r) => r.sourcePort, align: "right" },
             { header: "endpoint host", value: (r) => r.endpointHost },
             {
@@ -161,57 +261,37 @@ export function registerTunnelCommands(program: Command): void {
           );
         }
 
-        const { client } = await createContext(this);
-        const host = await client.request<HostRecord>({
-          method: "GET",
-          path: `/host/db/host/${hostId}`,
-        });
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("tunnels");
+        const host = await loadHost(client, hostId);
 
-        const connections = parseConnections(host);
-        const connection = connections[index];
+        const connection = parseConnections(host)[index];
         if (!connection) {
           throw new UsageError(
             `Host ${hostId} has no tunnel at index ${index}. Run \`termix tunnel show ${hostId}\`.`,
           );
         }
-        if (!host.ip || !host.username) {
-          throw new UsageError(
-            `Host ${hostId} is missing an address or username.`,
-          );
-        }
 
-        const endpointHost =
-          connection.endpointHost ?? connection.endpointIP ?? "";
-        const displayName = connection.name ?? `tunnel-${index}`;
-        const name = buildTunnelName(
-          hostId,
-          index,
-          displayName,
-          connection.sourcePort ?? "",
-          endpointHost,
-          connection.endpointPort ?? "",
-        );
-
+        const request = connectRequestFor(host, index, connection);
+        const name = String(request.name);
         await client.request({
           method: "POST",
-          path: "/ssh/tunnel/connect",
-          service: "tunnel",
-          data: {
-            ...connection,
-            name,
-            sourceHostId: hostId,
-            tunnelIndex: index,
-            hostName: host.name,
-            sourceIP: host.ip,
-            sourceSSHPort: host.port ?? 22,
-            sourceUsername: host.username,
-            sourceAuthMethod: host.authType,
-            sourceCredentialId: host.credentialId,
-            endpointHost,
-          },
+          path: pluginPath("tunnels", "/connect"),
+          data: request,
         });
 
-        printResult(`Started tunnel ${displayName}.`, { name, index });
+        const status = await waitForTunnel(client, name);
+        const state = status?.status ? String(status.status) : "connecting";
+        if (state === "failed") {
+          const reason = status?.reason ? `: ${String(status.reason)}` : ".";
+          throw new Error(`Tunnel ${name} failed to start${reason}`);
+        }
+        printResult(
+          state === "connected"
+            ? `Started tunnel ${name}.`
+            : `Tunnel ${name} is ${state}. Check \`termix tunnel list\`.`,
+          { name, index, status: state },
+        );
       });
     });
 
@@ -220,11 +300,11 @@ export function registerTunnelCommands(program: Command): void {
     .description("Stop a running tunnel by its full name (see `tunnel list`).")
     .action(async function (this: Command, name: string) {
       await run(async () => {
-        const { client } = await createContext(this);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("tunnels");
         await client.request({
           method: "POST",
-          path: "/ssh/tunnel/disconnect",
-          service: "tunnel",
+          path: pluginPath("tunnels", "/disconnect"),
           data: { tunnelName: name },
         });
         printResult(`Stopped tunnel ${name}.`, { name });

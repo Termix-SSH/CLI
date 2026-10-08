@@ -2,7 +2,13 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, it, expect, afterEach } from "vitest";
 import { TermixClient } from "../src/core/http.js";
-import { TermixApiError, TermixConnectionError } from "../src/core/errors.js";
+import {
+  ExitCode,
+  FeatureUnavailableError,
+  TermixApiError,
+  TermixConnectionError,
+  exitCodeFor,
+} from "../src/core/errors.js";
 import type { CliConfig } from "../src/core/config.js";
 
 interface Recorded {
@@ -160,15 +166,68 @@ describe("TermixClient", () => {
     ).rejects.toBeInstanceOf(TermixConnectionError);
   });
 
-  it("explains a 404 from a service that lives on another port", async () => {
+  it("treats the web app's index.html as a missing route", async () => {
+    // Behind nginx an unknown path falls through to the SPA with a 200.
     const { url } = await serve((_req, res) => {
-      res.writeHead(404, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "Not Found" }));
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<!doctype html><html></html>");
     });
 
     const client = new TermixClient(makeConfig(url));
-    await expect(
-      client.request({ method: "GET", path: "/status", service: "metrics" }),
-    ).rejects.toThrow(/metrics service/);
+    const error = await client
+      .request({ method: "GET", path: "/snippets" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TermixApiError);
+    expect((error as TermixApiError).status).toBe(404);
+    expect((error as Error).message).toMatch(/web page/);
+  });
+
+  it("reports a plugin that is turned off", async () => {
+    const { url } = await serve((_req, res) => {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "This feature is not available",
+          pluginId: "docker",
+        }),
+      );
+    });
+
+    const client = new TermixClient(makeConfig(url));
+    const error = await client
+      .request({ method: "POST", path: "/plugin-api/docker/ssh/connect" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FeatureUnavailableError);
+    expect((error as FeatureUnavailableError).reason).toBe("disabled");
+    expect(exitCodeFor(error)).toBe(ExitCode.FEATURE_UNAVAILABLE);
+  });
+
+  it("reports a plugin that is not installed", async () => {
+    const { url } = await serve((_req, res) => {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "This feature is not available" }));
+    });
+
+    const client = new TermixClient(makeConfig(url));
+    const error = await client
+      .request({ method: "GET", path: "/plugin-api/snippets" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FeatureUnavailableError);
+    expect((error as FeatureUnavailableError).reason).toBe("missing");
+    expect((error as Error).message).toMatch(/Snippets/);
+  });
+
+  it("keeps a plugin's own 404 as a normal not-found", async () => {
+    const { url } = await serve((_req, res) => {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Snippet not found" }));
+    });
+
+    const client = new TermixClient(makeConfig(url));
+    const error = await client
+      .request({ method: "GET", path: "/plugin-api/snippets/9" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TermixApiError);
+    expect(exitCodeFor(error)).toBe(ExitCode.NOT_FOUND);
   });
 });
