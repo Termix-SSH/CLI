@@ -61,11 +61,11 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "release_tag=release-$VERSION-tag" >> "$GITHUB_OUTPUT"
 
-      - name: Validate release notes
+      - name: Check CHANGELOG.md has notes for this version
         run: |
           node scripts/generate-release-body.cjs \
             --version "${{ steps.info.outputs.version }}" \
-            --notes RELEASE_NOTES.md > /dev/null
+            --changelog CHANGELOG.md > /dev/null
 
   normalize:
     name: Lint, test and sync the version
@@ -139,7 +139,7 @@ jobs:
         run: |
           node scripts/generate-release-body.cjs \
             --version "${{ needs.prep.outputs.version }}" \
-            --notes RELEASE_NOTES.md > PR_BODY.md
+            --changelog CHANGELOG.md > PR_BODY.md
 
       - name: Open and squash-merge the PR to main
         id: merge
@@ -295,7 +295,7 @@ jobs:
         run: |
           node scripts/generate-release-body.cjs \
             --version "${{ needs.prep.outputs.version }}" \
-            --notes RELEASE_NOTES.md > RELEASE_BODY.md
+            --changelog CHANGELOG.md > RELEASE_BODY.md
           cat RELEASE_BODY.md
 
       - name: Create or update the release
