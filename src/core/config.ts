@@ -22,16 +22,30 @@ export interface CliConfig {
   username?: string;
   insecureTls: boolean;
   requestTimeoutMs: number;
-  /** Per-service base URL overrides for non-nginx (bare backend) deployments. */
-  serviceUrls?: ServiceUrlOverrides;
 }
 
-export interface ServiceUrlOverrides {
-  metrics?: string;
-  docker?: string;
-  files?: string;
-  tunnel?: string;
-  terminal?: string;
+/**
+ * Per-service URLs for Termix 2.8, where some features listened on their own
+ * ports. Termix 2.9 serves everything on one origin, so these are ignored.
+ */
+export const RETIRED_SERVICE_URL_VARS = [
+  "TERMIX_METRICS_URL",
+  "TERMIX_DOCKER_URL",
+  "TERMIX_FILES_URL",
+  "TERMIX_TUNNEL_URL",
+  "TERMIX_TERMINAL_URL",
+] as const;
+
+let warnedRetiredVars = false;
+
+function warnRetiredServiceUrls(env: NodeJS.ProcessEnv): void {
+  if (warnedRetiredVars) return;
+  const set = RETIRED_SERVICE_URL_VARS.filter((name) => env[name]?.trim());
+  if (set.length === 0) return;
+  warnedRetiredVars = true;
+  process.stderr.write(
+    `termix: ignoring ${set.join(", ")}: Termix 2.9 and later serve everything at TERMIX_URL\n`,
+  );
 }
 
 const storedConfigSchema = z.object({
@@ -175,6 +189,7 @@ export function resolveConfig(
   opts: ResolveOptions = {},
 ): CliConfig {
   const stored = loadStoredConfig(env);
+  warnRetiredServiceUrls(env);
 
   const url = opts.url || env.TERMIX_URL || stored?.url;
   if (!url) {
@@ -208,13 +223,6 @@ export function resolveConfig(
     username: stored?.username,
     insecureTls: env.TERMIX_INSECURE_TLS === "true",
     requestTimeoutMs: timeoutMs,
-    serviceUrls: {
-      metrics: normaliseOptionalUrl(env.TERMIX_METRICS_URL),
-      docker: normaliseOptionalUrl(env.TERMIX_DOCKER_URL),
-      files: normaliseOptionalUrl(env.TERMIX_FILES_URL),
-      tunnel: normaliseOptionalUrl(env.TERMIX_TUNNEL_URL),
-      terminal: normaliseOptionalUrl(env.TERMIX_TERMINAL_URL),
-    },
   };
 }
 
@@ -226,9 +234,4 @@ function normaliseUrl(value: string): string {
     );
   }
   return trimmed;
-}
-
-function normaliseOptionalUrl(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? normaliseUrl(trimmed) : undefined;
 }

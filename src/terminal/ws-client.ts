@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { resolveWebSocketUrl } from "../core/services.js";
 import type { CliConfig } from "../core/config.js";
+import { featureDisabled, featureMissing } from "../core/plugins.js";
 
 /** Messages the server sends. Only the ones the CLI acts on are named. */
 export interface ServerMessage {
@@ -10,6 +11,10 @@ export interface ServerMessage {
   code?: string;
   sessionId?: string;
   path?: string;
+  /** Keyboard-interactive prompt text from the host. */
+  prompt?: string;
+  echo?: boolean;
+  isPush?: boolean;
 }
 
 export interface HostConfig {
@@ -37,18 +42,8 @@ export interface ConnectOptions {
 
 type MessageHandler = (message: ServerMessage) => void;
 
-/**
- * Where the terminal socket lives, newest layout first.
- *
- * Termix 2.9 moved the terminal into the ssh-terminal plugin, which serves it
- * under /plugin-ws/. Older servers serve it at /ssh/websocket/, a route 2.9
- * removed. Trying the current path first means only an older server pays for
- * a second handshake.
- */
-export const TERMINAL_WEBSOCKET_PATHS = [
-  "/plugin-ws/ssh-terminal/terminal",
-  "/ssh/websocket/",
-];
+/** The ssh-terminal plugin serves the terminal socket here. */
+export const TERMINAL_WEBSOCKET_PATH = "/plugin-ws/ssh-terminal/terminal";
 
 const LOGIN_HINT =
   "The server rejected the connection. Your session may have expired: run `termix login`.";
@@ -81,27 +76,11 @@ export class TerminalSocket {
   ) {}
 
   async open(): Promise<void> {
-    let unanswered: { error: Error; url: string } | undefined;
-
-    for (const path of TERMINAL_WEBSOCKET_PATHS) {
-      const url = resolveWebSocketUrl(this.config, path);
-      try {
-        this.ws = await this.handshake(url);
-        break;
-      } catch (caught) {
-        const error = caught as Error;
-        // Refused, timed out or unauthorised would fail the same way at the
-        // other path, so only a server that answered without upgrading is
-        // worth asking again.
-        if (!isWrongPath(error)) throw new Error(handshakeMessage(error, url));
-        unanswered ??= { error, url };
-      }
-    }
-
-    if (!this.ws) {
-      // Neither layout answered. Report the current one, which is where a
-      // supported server serves the terminal.
-      throw new Error(handshakeMessage(unanswered!.error, unanswered!.url));
+    const url = resolveWebSocketUrl(this.config, TERMINAL_WEBSOCKET_PATH);
+    try {
+      this.ws = await this.handshake(url);
+    } catch (caught) {
+      throw handshakeError(caught as Error, url);
     }
 
     // The server drops idle sockets; a periodic ping keeps a session alive
@@ -155,8 +134,17 @@ export class TerminalSocket {
     return () => this.handlers.delete(handler);
   }
 
-  /** Wait for one of `types`, rejecting on `error` or an early close. */
+  /**
+   * Wait for one of `types`, rejecting on `error` or an early close. A type
+   * starting with `*` matches by suffix, e.g. `*_auth_required`.
+   */
   waitFor(types: string[], timeoutMs = 60_000): Promise<ServerMessage> {
+    const matches = (type: string): boolean =>
+      types.some((wanted) =>
+        wanted.startsWith("*")
+          ? type.endsWith(wanted.slice(1))
+          : wanted === type,
+      );
     return new Promise((resolve, reject) => {
       // onMessage replays buffered messages synchronously, so the handler can
       // run during registration - before the timer and unsubscribe exist.
@@ -182,7 +170,7 @@ export class TerminalSocket {
 
       state.unsubscribe = this.onMessage((message) => {
         if (state.settled) return;
-        if (types.includes(message.type)) {
+        if (matches(message.type)) {
           cleanup();
           resolve(message);
         } else if (message.type === "error") {
@@ -271,32 +259,19 @@ function parseMessage(raw: WebSocket.RawData): ServerMessage | null {
 }
 
 /**
- * The server answered the upgrade with an ordinary HTTP response, so it is up
- * but serves nothing there: a route that does not exist on this version, or a
- * proxy (Cloudflare answers 502) with nothing behind that path. A refused
- * credential is not a wrong path.
- */
-function isWrongPath(error: Error): boolean {
-  const match = /Unexpected server response: (\d{3})/.exec(error.message);
-  return match !== null && match[1] !== "401" && match[1] !== "403";
-}
-
-/**
  * The handshake fails with a bare "Unexpected server response: 401", which
- * says nothing about what to do, so translate the common cases.
+ * says nothing about what to do, so translate the common cases. Core answers
+ * 404 when the ssh-terminal plugin is not installed and 503 when it is off.
  */
-function handshakeMessage(error: Error, url: string): string {
-  const text = error.message;
-  if (text.includes("401") || text.includes("403")) {
-    return LOGIN_HINT;
+export function handshakeError(error: Error, url: string): Error {
+  const status = /Unexpected server response: (\d{3})/.exec(error.message)?.[1];
+  if (status === "401" || status === "403") return new Error(LOGIN_HINT);
+  if (status === "404") return featureMissing("terminal");
+  if (status === "503") return featureDisabled("terminal");
+  if (error.message.includes("ECONNREFUSED")) {
+    return new Error(`Could not reach the Termix server at ${url}.`);
   }
-  if (text.includes("ECONNREFUSED")) {
-    return `Could not reach the terminal service at ${url}. If you are connecting straight to a backend older than Termix 2.9 rather than through a proxy, set TERMIX_TERMINAL_URL.`;
-  }
-  if (text.includes("404")) {
-    return `The terminal endpoint was not found at ${url}. If you are connecting straight to a backend older than Termix 2.9, set TERMIX_TERMINAL_URL (default port 30002).`;
-  }
-  return `Could not open the terminal connection: ${text}`;
+  return new Error(`Could not open the terminal connection: ${error.message}`);
 }
 
 /**

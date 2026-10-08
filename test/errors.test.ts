@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ExitCode,
+  FeatureUnavailableError,
   TermixApiError,
   TermixConnectionError,
   UsageError,
@@ -69,5 +70,16 @@ describe("messageFor", () => {
       "nope (HTTP 404)",
     );
     expect(messageFor(new Error("plain"))).toBe("plain");
+  });
+});
+
+describe("unavailable features", () => {
+  it("exit with their own code and point at the plugins list", () => {
+    const missing = new FeatureUnavailableError("gone", "docker", "missing");
+    const off = new FeatureUnavailableError("off", "docker", "disabled");
+    expect(ExitCode.FEATURE_UNAVAILABLE).toBe(8);
+    expect(exitCodeFor(missing)).toBe(ExitCode.FEATURE_UNAVAILABLE);
+    expect(remediationFor(missing)).toMatch(/install/);
+    expect(remediationFor(off)).toMatch(/turn it on/);
   });
 });

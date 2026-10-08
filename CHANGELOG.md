@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.0
+
+Works with Termix plugins. Needs Termix 2.9 or newer.
+
+### Added
+
+- `termix plugins` shows what your server has
+- `termix api` calls any route, including plugin routes
+- Exit code 8 when a command needs a plugin that is missing or off
+- `files rm --trash`, `alerts delete`, and `alerts --unread` and `--limit`
+- Prompts for a host's code, password or key passphrase
+- `ssh` asks before trusting a new or changed host key, and `--trust-host-key` for new keys in scripts
+
+### Fixed
+
+- Files, Docker, tunnels, fleets, snippets, alerts, status and ssh on Termix 2.9 and later
+- Binary files in `files get`, `cat` and `put`
+- `hosts create` and `update` ignoring `--enable-docker` and `--enable-tunnel`
+
 ## 1.0.2
 
 The CLI now lives at `@termix-ssh/cli` on npm and works with Termix 2.9. If you installed `@termix-cli/cli`, uninstall it and install `@termix-ssh/cli` instead.

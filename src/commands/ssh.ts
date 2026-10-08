@@ -3,7 +3,7 @@ import { createContext } from "../core/context.js";
 import { requireSessionToken } from "../core/auth.js";
 import { ExitCode, UsageError } from "../core/errors.js";
 import { fail, printInfo } from "../core/output/index.js";
-import { promptHidden } from "../core/prompt.js";
+import { confirm, prompt, promptHidden } from "../core/prompt.js";
 import { TerminalSocket, type HostConfig } from "../terminal/ws-client.js";
 import { currentSize, isInteractive, startTty } from "../terminal/tty.js";
 import { parseId } from "./hosts.js";
@@ -50,16 +50,26 @@ export function registerSshCommands(program: Command): void {
     )
     .option("--path <path>", "Directory to start in")
     .option("--tmux <session>", "Attach to a tmux session by name")
+    .option(
+      "--trust-host-key",
+      "Trust a host key seen for the first time without asking. A changed key is never trusted this way",
+    )
     .action(async function (
       this: Command,
       hostIdArg: string,
-      opts: { command?: string; path?: string; tmux?: string },
+      opts: {
+        command?: string;
+        path?: string;
+        tmux?: string;
+        trustHostKey?: boolean;
+      },
     ) {
       let tty: { restore: () => void } | undefined;
       try {
         const id = parseId(hostIdArg);
-        const { config, client } = await createContext(this);
+        const { config, client, requireFeature } = await createContext(this);
         const token = requireSessionToken(config, "`termix ssh`");
+        await requireFeature("terminal");
 
         const host = await client.request<HostRecord>({
           method: "GET",
@@ -84,6 +94,7 @@ export function registerSshCommands(program: Command): void {
           command: opts.command,
           path: opts.path,
           tmux: opts.tmux,
+          trustHostKey: opts.trustHostKey === true,
           onTty: (session) => {
             tty = session;
           },
@@ -98,12 +109,125 @@ export function registerSshCommands(program: Command): void {
     });
 }
 
+const READY = ["connected", "sessionAttached"];
+const AUTH_STEPS = [
+  "host_key_verification_required",
+  "host_key_changed",
+  "passphrase_required",
+  "totp_required",
+  "totp_retry",
+  "password_required",
+  "*_auth_required",
+];
+const MAX_AUTH_ROUNDS = 10;
+
+interface HostKeyData {
+  fingerprint?: string;
+  keyType?: string;
+  oldFingerprint?: string;
+  oldKeyType?: string;
+}
+
+/**
+ * Ask whether to trust a host key, like ssh does. A new key can be trusted up
+ * front with --trust-host-key; a changed one always needs a person.
+ */
+export async function decideHostKey(
+  changed: boolean,
+  data: HostKeyData,
+  hostLabel: string,
+  trustNew: boolean,
+): Promise<boolean> {
+  if (!changed && trustNew) return true;
+  if (changed) {
+    process.stderr.write(
+      `WARNING: the host key for ${hostLabel} has changed. Someone may be intercepting the connection.\n` +
+        `  Old: ${data.oldKeyType ?? "?"} ${data.oldFingerprint ?? "?"}\n` +
+        `  New: ${data.keyType ?? "?"} ${data.fingerprint ?? "?"}\n`,
+    );
+  } else {
+    process.stderr.write(
+      `The host key for ${hostLabel} has not been seen before.\n` +
+        `  ${data.keyType ?? "?"} ${data.fingerprint ?? "?"}\n`,
+    );
+  }
+  return confirm(changed ? "Trust the new key anyway?" : "Trust this key?");
+}
+
+/**
+ * Answer whatever the host asks before the shell opens: its host key, a key
+ * passphrase, a verification code or a keyboard-interactive password. A
+ * browser sign-in cannot happen in a terminal, so that fails straight away.
+ */
+async function completeAuth(
+  socket: TerminalSocket,
+  connect: { cols: number; rows: number; hostConfig: HostConfig },
+  trustHostKey: boolean,
+): Promise<void> {
+  const label = `${connect.hostConfig.username}@${connect.hostConfig.ip}:${connect.hostConfig.port}`;
+  for (let round = 0; round < MAX_AUTH_ROUNDS; round++) {
+    const message = await socket.waitFor([...READY, ...AUTH_STEPS]);
+    if (READY.includes(message.type)) return;
+
+    switch (message.type) {
+      case "host_key_verification_required":
+      case "host_key_changed": {
+        const accept = await decideHostKey(
+          message.type === "host_key_changed",
+          (message.data ?? {}) as HostKeyData,
+          label,
+          trustHostKey,
+        );
+        socket.send("host_key_verification_response", {
+          action: accept ? "accept" : "reject",
+        });
+        if (!accept)
+          throw new Error(
+            "Host key not trusted, so the connection was closed.",
+          );
+        break;
+      }
+      case "passphrase_required": {
+        const keyPassword = await promptHidden("Key passphrase: ");
+        socket.send("reconnect_with_credentials", { ...connect, keyPassword });
+        break;
+      }
+      case "totp_required":
+      case "totp_retry": {
+        const label =
+          message.type === "totp_retry"
+            ? "That code did not work. Verification code:"
+            : message.prompt?.trim() || "Verification code:";
+        socket.send("totp_response", { code: await promptHidden(`${label} `) });
+        break;
+      }
+      case "password_required": {
+        const label = message.isPush
+          ? "Approve the sign-in on your device, then press Enter:"
+          : message.prompt?.trim() || "Password:";
+        const code =
+          message.echo || message.isPush
+            ? await prompt(`${label} `)
+            : await promptHidden(`${label} `);
+        socket.send("password_response", { code });
+        break;
+      }
+      default:
+        throw new Error(
+          `Host ${connect.hostConfig.id} needs a browser sign-in, which the CLI cannot do. Use the web UI.`,
+        );
+    }
+  }
+  throw new Error("The host kept asking for more sign-in steps.");
+}
+
 interface SessionOptions {
   hostConfig: HostConfig;
   interactive: boolean;
   command?: string;
   path?: string;
   tmux?: string;
+  trustHostKey: boolean;
   onTty: (session: { restore: () => void }) => void;
 }
 
@@ -122,19 +246,11 @@ async function runSession(
     tmuxAttachSession: opts.tmux,
   });
 
-  // The server answers a connect with `connected`, or asks for a key
-  // passphrase first when the stored key is encrypted.
-  let ready = await socket.waitFor([
-    "connected",
-    "passphrase_required",
-    "sessionAttached",
-  ]);
-
-  if (ready.type === "passphrase_required") {
-    const passphrase = await promptHidden("Key passphrase: ");
-    socket.send("password_response", { password: passphrase });
-    ready = await socket.waitFor(["connected", "sessionAttached"]);
-  }
+  await completeAuth(
+    socket,
+    { cols, rows, hostConfig: opts.hostConfig },
+    opts.trustHostKey,
+  );
 
   return new Promise<number>((resolve) => {
     let tty: { restore: () => void } | undefined;

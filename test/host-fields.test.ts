@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { buildHostPayload } from "../src/commands/host-fields.js";
+import {
+  buildHostPayload,
+  hostToggleSettings,
+} from "../src/commands/host-fields.js";
 import { parseId } from "../src/commands/hosts.js";
 
 describe("parseId", () => {
@@ -57,5 +60,26 @@ describe("buildHostPayload", () => {
     expect(() => buildHostPayload({ credentialId: "abc" })).toThrow(
       /credential-id/i,
     );
+  });
+});
+
+describe("hostToggleSettings", () => {
+  it("sends each --enable flag to the plugin that owns it", () => {
+    expect(
+      hostToggleSettings({ enableDocker: true, enableTunnel: false }),
+    ).toEqual([
+      { pluginId: "docker", settings: { enableDocker: true } },
+      { pluginId: "tunnels", settings: { enableTunnel: false } },
+    ]);
+    expect(
+      hostToggleSettings({ enableTerminal: true, enableFileManager: true }),
+    ).toEqual([
+      { pluginId: "ssh-terminal", settings: { enableTerminal: true } },
+      { pluginId: "file-manager", settings: { enableFileManager: true } },
+    ]);
+  });
+
+  it("writes nothing when no flag is passed", () => {
+    expect(hostToggleSettings({ name: "x" })).toEqual([]);
   });
 });

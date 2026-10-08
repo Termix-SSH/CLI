@@ -3,9 +3,10 @@ import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import { describe, it, expect, afterEach } from "vitest";
 import {
-  TERMINAL_WEBSOCKET_PATHS,
+  TERMINAL_WEBSOCKET_PATH,
   TerminalSocket,
 } from "../src/terminal/ws-client.js";
+import { FeatureUnavailableError } from "../src/core/errors.js";
 import type { CliConfig } from "../src/core/config.js";
 
 let server: http.Server | undefined;
@@ -23,11 +24,9 @@ interface Harness {
   send: (payload: unknown) => void;
 }
 
-const [CURRENT_PATH, LEGACY_PATH] = TERMINAL_WEBSOCKET_PATHS;
-
 async function startServer(
   onConnect?: (ws: WebSocket) => void,
-  path = CURRENT_PATH,
+  path = TERMINAL_WEBSOCKET_PATH,
 ): Promise<Harness> {
   const received: Array<{ type: string; data?: unknown }> = [];
   const upgrades: string[] = [];
@@ -36,8 +35,6 @@ async function startServer(
 
   server = http.createServer();
   server.on("upgrade", (req) => upgrades.push(req.url ?? ""));
-  // A request for any other path is refused with a 400, as an older server
-  // answers the current path.
   wss = new WebSocketServer({ server, path });
 
   wss.on("connection", (ws, req) => {
@@ -266,7 +263,7 @@ describe("TerminalSocket", () => {
     await expect(socket.open()).rejects.toThrow(/termix login/);
   });
 
-  it("connects at the plugin path that Termix 2.9 serves", async () => {
+  it("connects at the ssh-terminal plugin's path", async () => {
     const harness = await startServer();
     const socket = new TerminalSocket(harness.config, "jwt");
     await socket.open();
@@ -275,17 +272,7 @@ describe("TerminalSocket", () => {
     socket.close();
   });
 
-  it("falls back to /ssh/websocket/ on a server older than 2.9", async () => {
-    const harness = await startServer(undefined, LEGACY_PATH);
-    const socket = new TerminalSocket(harness.config, "jwt");
-    await socket.open();
-
-    expect(harness.upgrades).toEqual([CURRENT_PATH, LEGACY_PATH]);
-    expect(harness.authHeader()).toBe("Bearer jwt");
-    socket.close();
-  });
-
-  it("does not retry the old path when the credential is refused", async () => {
+  it("does not try any other path", async () => {
     const upgrades: string[] = [];
     server = http.createServer((req, res) => {
       upgrades.push(req.url ?? "");
@@ -307,8 +294,39 @@ describe("TerminalSocket", () => {
     );
 
     await expect(socket.open()).rejects.toThrow(/termix login/);
-    expect(upgrades).toEqual([CURRENT_PATH]);
+    expect(upgrades).toEqual([TERMINAL_WEBSOCKET_PATH]);
   });
+
+  it.each([
+    [404, "missing", /not installed/],
+    [503, "disabled", /turned off/],
+  ])(
+    "reports the ssh-terminal plugin as unavailable on a %i",
+    async (status, reason, message) => {
+      server = http.createServer((_req, res) => {
+        res.writeHead(status);
+        res.end();
+      });
+      await new Promise<void>((resolve) =>
+        server!.listen(0, "127.0.0.1", resolve),
+      );
+      const { port } = server!.address() as AddressInfo;
+
+      const socket = new TerminalSocket(
+        {
+          url: `http://127.0.0.1:${port}`,
+          insecureTls: false,
+          requestTimeoutMs: 5000,
+        },
+        "jwt",
+      );
+
+      const error = await socket.open().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(FeatureUnavailableError);
+      expect((error as FeatureUnavailableError).reason).toBe(reason);
+      expect((error as Error).message).toMatch(message);
+    },
+  );
 
   it("reports the failure when neither path is served", async () => {
     // Cloudflare in front of a server with no terminal route answers 502.

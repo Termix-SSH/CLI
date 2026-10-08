@@ -15,6 +15,7 @@ export const ExitCode = {
   NOT_FOUND: 5,
   UNREACHABLE: 6,
   DATA_LOCKED: 7,
+  FEATURE_UNAVAILABLE: 8,
   INTERNAL: 255,
 } as const;
 
@@ -69,6 +70,26 @@ export class TermixConnectionError extends Error {
   }
 }
 
+/**
+ * The server has no running plugin for the feature a command needs. Since
+ * Termix 2.9 terminals, files, Docker, tunnels and the rest are plugins an
+ * admin can remove or turn off.
+ */
+export class FeatureUnavailableError extends Error {
+  constructor(
+    message: string,
+    readonly pluginId: string,
+    readonly reason: "missing" | "disabled",
+  ) {
+    super(message);
+    this.name = "FeatureUnavailableError";
+  }
+
+  get exitCode(): ExitCodeValue {
+    return ExitCode.FEATURE_UNAVAILABLE;
+  }
+}
+
 /** Bad flags or arguments: the user's invocation, not the server's fault. */
 export class UsageError extends Error {
   constructor(message: string) {
@@ -86,6 +107,11 @@ export class UsageError extends Error {
  * one is available. The codes come from the backend auth middleware.
  */
 export function remediationFor(error: unknown): string | undefined {
+  if (error instanceof FeatureUnavailableError) {
+    return error.reason === "missing"
+      ? "An admin can install it in Settings > Plugins. Run `termix plugins` to see what this server has."
+      : "An admin can turn it on in Settings > Plugins. Run `termix plugins` to see what this server has.";
+  }
   if (!(error instanceof TermixApiError)) return undefined;
 
   switch (error.code) {
@@ -120,6 +146,7 @@ export function exitCodeFor(error: unknown): ExitCodeValue {
   if (
     error instanceof TermixApiError ||
     error instanceof TermixConnectionError ||
+    error instanceof FeatureUnavailableError ||
     error instanceof UsageError
   ) {
     return error.exitCode;

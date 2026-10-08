@@ -3,6 +3,8 @@ import { resolveConfig, type CliConfig } from "./config.js";
 import { loadSession } from "./credentials-store.js";
 import { TermixClient } from "./http.js";
 import { configureOutput } from "./output/index.js";
+import { requireFeature } from "./plugins.js";
+import type { Feature } from "../api/features.js";
 
 export interface GlobalFlags {
   url?: string;
@@ -23,6 +25,8 @@ export interface GlobalFlags {
 export interface CommandContext {
   config: CliConfig;
   client: TermixClient;
+  /** Fail with exit code 8 unless the feature's plugin is running. */
+  requireFeature: (feature: Feature) => Promise<void>;
 }
 
 /** Read the global flags from the root command, wherever we are in the tree. */
@@ -69,5 +73,10 @@ export async function createContext(command: Command): Promise<CommandContext> {
     }
   }
 
-  return { config, client: new TermixClient(config) };
+  const client = new TermixClient(config);
+  return {
+    config,
+    client,
+    requireFeature: (feature) => requireFeature(client, feature),
+  };
 }

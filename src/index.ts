@@ -19,6 +19,8 @@ import { registerAlertCommands } from "./commands/alerts.js";
 import { registerAdminCommands } from "./commands/admin.js";
 import { registerApiKeyCommands } from "./commands/api-keys.js";
 import { registerMiscCommands } from "./commands/misc.js";
+import { registerPluginCommands } from "./commands/plugins.js";
+import { registerApiCommands } from "./commands/api.js";
 
 const program = new Command();
 
@@ -58,6 +60,8 @@ registerAlertCommands(program);
 registerAdminCommands(program);
 registerApiKeyCommands(program);
 registerMiscCommands(program);
+registerPluginCommands(program);
+registerApiCommands(program);
 
 // Commander exits the process itself; take it over so every path leaves
 // through our exit-code taxonomy instead of commander's 0/1.

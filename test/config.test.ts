@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   resolveConfig,
   saveStoredConfig,
@@ -160,13 +160,24 @@ describe("resolveConfig", () => {
     expect(cfg.apiKey).toBeUndefined();
   });
 
-  it("reads per-service URL overrides", () => {
-    const cfg = resolveConfig({
-      ...env,
-      TERMIX_URL: "http://x.local",
-      TERMIX_METRICS_URL: "http://x.local:30005/",
-    } as NodeJS.ProcessEnv);
-    expect(cfg.serviceUrls?.metrics).toBe("http://x.local:30005");
+  it("ignores the per-service URLs Termix 2.8 needed, even invalid ones", () => {
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const cfg = resolveConfig({
+        ...env,
+        TERMIX_URL: "http://x.local",
+        TERMIX_METRICS_URL: "not a url",
+      } as NodeJS.ProcessEnv);
+      expect(cfg.url).toBe("http://x.local");
+      expect(cfg).not.toHaveProperty("serviceUrls");
+      expect(String(write.mock.calls[0]?.[0])).toMatch(
+        /ignoring TERMIX_METRICS_URL/,
+      );
+    } finally {
+      write.mockRestore();
+    }
   });
 
   it("validates TERMIX_REQUEST_TIMEOUT_MS", () => {

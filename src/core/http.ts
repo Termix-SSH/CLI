@@ -4,7 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { CliConfig } from "./config.js";
 import { getBearer } from "./auth.js";
 import { TermixApiError, TermixConnectionError } from "./errors.js";
-import { resolveServiceUrl, type TermixService } from "./services.js";
+import { unavailableFor } from "./plugins.js";
 import { CLI_VERSION } from "../version.js";
 
 export { TermixApiError } from "./errors.js";
@@ -17,8 +17,6 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   /** Skip the Authorization header (login, health). */
   noAuth?: boolean;
-  /** Which backend service serves this path. Defaults to the main API. */
-  service?: TermixService;
   /** Override the response type, e.g. "arraybuffer" for downloads. */
   responseType?: "json" | "text" | "arraybuffer" | "stream";
   /** Force retry on/off, overriding the method-based default. */
@@ -48,14 +46,15 @@ export function setUserAgent(version: string): void {
 }
 
 /**
- * HTTP client for the Termix API. Attaches the bearer credential, routes to
- * the right backend service, retries transient failures and normalises errors.
+ * HTTP client for the Termix API. Attaches the bearer credential, retries
+ * transient failures and normalises errors. Since Termix 2.9 core and every
+ * plugin answer on the one origin, so there is a single base URL.
  *
  * There is no automatic re-login: Termix has no client refresh endpoint, so an
  * expired or revoked session surfaces as a 401 telling the user to log in.
  */
 export class TermixClient {
-  private readonly instances = new Map<string, AxiosInstance>();
+  private instance?: AxiosInstance;
 
   constructor(private readonly config: CliConfig) {
     if (config.insecureTls) {
@@ -65,13 +64,11 @@ export class TermixClient {
     }
   }
 
-  private clientFor(service: TermixService): AxiosInstance {
-    const baseURL = resolveServiceUrl(this.config, service);
-    const existing = this.instances.get(baseURL);
-    if (existing) return existing;
+  private axios(): AxiosInstance {
+    if (this.instance) return this.instance;
 
-    const instance = axios.create({
-      baseURL,
+    this.instance = axios.create({
+      baseURL: this.config.url,
       timeout: this.config.requestTimeoutMs,
       httpsAgent: this.config.insecureTls
         ? new https.Agent({ rejectUnauthorized: false })
@@ -80,12 +77,10 @@ export class TermixClient {
       // We handle non-2xx ourselves for uniform error mapping.
       validateStatus: () => true,
     });
-    this.instances.set(baseURL, instance);
-    return instance;
+    return this.instance;
   }
 
   async request<T = unknown>(opts: RequestOptions): Promise<T> {
-    const service = opts.service ?? "api";
     const method = String(opts.method).toUpperCase();
     const retryable = opts.retry ?? IDEMPOTENT.has(method);
 
@@ -101,7 +96,7 @@ export class TermixClient {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       let res;
       try {
-        res = await this.clientFor(service).request({
+        res = await this.axios().request({
           method: opts.method,
           url: opts.path,
           params: opts.params,
@@ -113,7 +108,7 @@ export class TermixClient {
         // Transport-level failure (DNS, refused, TLS, timeout).
         lastError = new TermixConnectionError(
           connectionMessage(error),
-          resolveServiceUrl(this.config, service),
+          this.config.url,
         );
         if (retryable && attempt < MAX_ATTEMPTS) {
           await sleep(backoffMs(attempt));
@@ -123,6 +118,13 @@ export class TermixClient {
       }
 
       if (res.status >= 200 && res.status < 300) {
+        if (isUnexpectedHtml(res.headers, opts.responseType)) {
+          throw new TermixApiError(
+            "The server answered with a web page instead of the API. This route does not exist on this Termix version.",
+            404,
+            opts.path,
+          );
+        }
         return res.data as T;
       }
 
@@ -137,7 +139,7 @@ export class TermixClient {
         continue;
       }
 
-      throw toApiError(res.status, res.data, opts.path, service);
+      throw toApiError(res.status, res.data, opts.path);
     }
 
     throw lastError ?? new Error("Request failed");
@@ -159,25 +161,40 @@ function retryAfterMs(header: unknown): number | undefined {
   return undefined;
 }
 
-function toApiError(
-  status: number,
-  data: unknown,
-  path: string,
-  service: TermixService,
-): TermixApiError {
-  const { error, code } = extractError(data);
-  let message = error ?? `HTTP ${status}`;
+/**
+ * Behind nginx an unknown path falls through to the web app, which answers
+ * 200 with index.html. Treat that as the missing route it is.
+ */
+function isUnexpectedHtml(
+  headers: unknown,
+  responseType: RequestOptions["responseType"],
+): boolean {
+  if (responseType && responseType !== "json") return false;
+  const type = (headers as Record<string, unknown> | undefined)?.[
+    "content-type"
+  ];
+  return typeof type === "string" && type.includes("text/html");
+}
 
-  // A 404 on a non-API service usually means the CLI is talking to a bare
-  // backend where that service listens on its own port, rather than through
-  // the reverse proxy that normally fronts them all.
-  if (status === 404 && service !== "api") {
-    message +=
-      ` - "${path}" is served by the ${service} service, which is not reachable at this URL.` +
-      ` Point TERMIX_${service.toUpperCase()}_URL at it, or use the address your reverse proxy serves.`;
+const PLUGIN_PATH = /^\/plugin-api\/([^/?#]+)/;
+const NOT_AVAILABLE = "This feature is not available";
+
+function toApiError(status: number, data: unknown, path: string): Error {
+  // Core answers for a plugin that is gone (404) or turned off (503, with
+  // its id) before the plugin ever sees the request.
+  const pluginId = PLUGIN_PATH.exec(path)?.[1];
+  if (pluginId && data && typeof data === "object") {
+    const body = data as { error?: unknown; pluginId?: unknown };
+    if (status === 503 && body.pluginId === pluginId) {
+      return unavailableFor(pluginId, "disabled");
+    }
+    if (status === 404 && body.error === NOT_AVAILABLE && !body.pluginId) {
+      return unavailableFor(pluginId, "missing");
+    }
   }
 
-  return new TermixApiError(message, status, path, code);
+  const { error, code } = extractError(data);
+  return new TermixApiError(error ?? `HTTP ${status}`, status, path, code);
 }
 
 interface ConnectionLogEntry {

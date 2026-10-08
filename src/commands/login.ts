@@ -22,6 +22,8 @@ interface LoginResponse {
   token?: string;
   requires_totp?: boolean;
   temp_token?: string;
+  /** The account's second factors, on Termix 2.9 and later. */
+  second_factors?: Array<{ id?: string; pluginId?: string }>;
   is_admin?: boolean;
   username?: string;
 }
@@ -32,7 +34,6 @@ function bareClient(url: string, insecure: boolean): TermixClient {
     url: url.replace(/\/+$/, ""),
     insecureTls: insecure || process.env.TERMIX_INSECURE_TLS === "true",
     requestTimeoutMs: 60000,
-    serviceUrls: {},
   };
   return new TermixClient(config);
 }
@@ -97,6 +98,16 @@ export function registerAuthCommands(program: Command): void {
         });
 
         if (res.requires_totp && res.temp_token) {
+          // Only a typed code works here. A passkey-only account has to use
+          // an API key.
+          const factors = res.second_factors ?? [];
+          const hasTotp =
+            factors.length === 0 || factors.some((f) => f.id === "totp");
+          if (!hasTotp) {
+            throw new UsageError(
+              "This account signs in with a second factor the CLI cannot complete, such as a passkey. Create an API key in Termix and pass it with --api-key or TERMIX_API_KEY.",
+            );
+          }
           const totpCode =
             opts.totp || (await promptHidden("Two-factor code: "));
           if (!totpCode) {
@@ -108,6 +119,7 @@ export function registerAuthCommands(program: Command): void {
             data: {
               temp_token: res.temp_token,
               totp_code: totpCode,
+              ...(factors.length ? { factor: "totp" } : {}),
               rememberMe: true,
             },
             headers: { "X-Electron-App": "true" },

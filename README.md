@@ -24,7 +24,7 @@
 
 ## Overview
 
-The Termix CLI talks to your [Termix](https://github.com/Termix-SSH/Termix) server, so you can use it from a terminal and in your own scripts. Commands for terminals, files, tunnels, Docker and fleets need the matching plugin turned on in Termix.
+The Termix CLI talks to your [Termix](https://github.com/Termix-SSH/Termix) server, so you can use it from a terminal and in your own scripts. It works with Termix 2.9 and newer. Commands for terminals, files, tunnels, Docker, fleets, snippets and alerts need the matching plugin turned on in Termix, and `termix plugins` shows what your server has.
 
 <br />
 
@@ -37,6 +37,7 @@ The Termix CLI talks to your [Termix](https://github.com/Termix-SSH/Termix) serv
 - Fleets, including running a command across every host at once
 - Host, credential and snippet management, with import and export
 - API keys and host enrollment for scripts, CI and AI agents
+- `termix api` for any route, including plugin routes the CLI has no command for yet
 - Table output on a terminal, JSON when piped, with documented exit codes
 
 <br />
@@ -47,7 +48,7 @@ The Termix CLI talks to your [Termix](https://github.com/Termix-SSH/Termix) serv
 npm install -g @termix-ssh/cli
 ```
 
-Requires Node.js 20.11 or newer. Standalone binaries for Windows, Linux and macOS
+Requires Node.js 22.12 or newer. Standalone binaries for Windows, Linux and macOS
 that need no Node.js install are attached to each
 [release](https://github.com/Termix-SSH/CLI/releases).
 
