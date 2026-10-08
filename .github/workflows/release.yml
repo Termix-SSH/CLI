@@ -45,7 +45,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
 
       - name: Resolve version
         id: info
@@ -81,7 +81,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
           cache: npm
 
       - run: npm ci
@@ -133,7 +133,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
 
       - name: Generate the PR body
         run: |
@@ -204,7 +204,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
           cache: npm
 
       - run: npm ci
@@ -238,7 +238,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
           architecture: ${{ matrix.arch }}
           cache: npm
 
@@ -267,7 +267,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
 
       - uses: actions/download-artifact@v4
         with:
@@ -333,7 +333,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
           cache: npm
           registry-url: https://registry.npmjs.org
 
