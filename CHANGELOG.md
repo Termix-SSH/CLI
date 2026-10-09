@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+
+- `ssh` asks for a password when the host has no saved login, instead of hanging until it times out
+
 ## 1.1.0
 
 Works with Termix plugins. Needs Termix 2.9 or newer.
