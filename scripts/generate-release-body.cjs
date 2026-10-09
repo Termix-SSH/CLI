@@ -44,7 +44,7 @@ function changelogSection(changelog, version) {
  * there.
  */
 function buildTable(version) {
-  const tag = `release-${version}-tag`;
+  const tag = `v${version}`;
   const base = `https://github.com/Termix-SSH/CLI/releases/download/${tag}`;
   const url = (file) => `${base}/${file}`;
 
