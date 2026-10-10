@@ -117,6 +117,7 @@ const AUTH_STEPS = [
   "totp_required",
   "totp_retry",
   "password_required",
+  "auth_method_not_available",
   "*_auth_required",
 ];
 const MAX_AUTH_ROUNDS = 10;
@@ -159,7 +160,7 @@ export async function decideHostKey(
  * passphrase, a verification code or a keyboard-interactive password. A
  * browser sign-in cannot happen in a terminal, so that fails straight away.
  */
-async function completeAuth(
+export async function completeAuth(
   socket: TerminalSocket,
   connect: { cols: number; rows: number; hostConfig: HostConfig },
   trustHostKey: boolean,
@@ -185,6 +186,12 @@ async function completeAuth(
           throw new Error(
             "Host key not trusted, so the connection was closed.",
           );
+        break;
+      }
+      case "auth_method_not_available": {
+        // The host has no saved login the server can use, so ask for one.
+        const password = await promptHidden("Password: ");
+        socket.send("reconnect_with_credentials", { ...connect, password });
         break;
       }
       case "passphrase_required": {

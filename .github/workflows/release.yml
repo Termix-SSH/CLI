@@ -59,7 +59,7 @@ jobs:
           fi
           echo "dev_branch=$DEV_BRANCH" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "release_tag=release-$VERSION-tag" >> "$GITHUB_OUTPUT"
+          echo "release_tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check CHANGELOG.md has notes for this version
         run: |
@@ -147,7 +147,7 @@ jobs:
           GH_TOKEN: ${{ secrets.TERMIX_PAT || github.token }}
         run: |
           DEV_BRANCH="${{ needs.prep.outputs.dev_branch }}"
-          TITLE="release-${{ needs.prep.outputs.version }}"
+          TITLE="v${{ needs.prep.outputs.version }}"
 
           if [ "${{ inputs.mode }}" = "Overwrite release" ]; then
             echo "OVERWRITE: no merge; building from main as-is."
@@ -303,7 +303,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ needs.prep.outputs.release_tag }}"
-          TITLE="release-${{ needs.prep.outputs.version }}"
+          TITLE="v${{ needs.prep.outputs.version }}"
           if gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
             gh release edit "$TAG" --repo ${{ github.repository }} \
               --title "$TITLE" --notes-file RELEASE_BODY.md
