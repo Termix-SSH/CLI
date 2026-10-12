@@ -62,7 +62,7 @@ Full documentation is at [docs.termix.site/cli](https://docs.termix.site/cli/).
 
 ## Sponsors
 
-Interested in a paid placement to support development? Email [mail@termix.site](mailto:mail@termix.site).
+For a paid sponsor spot, email [mail@termix.site](mailto:mail@termix.site).
 
 <!-- SPONSORS:START -->
 
@@ -108,7 +108,7 @@ Interested in a paid placement to support development? Email [mail@termix.site](
 
 Bugs and ideas for the CLI go in this repo: [report a bug](https://github.com/Termix-SSH/CLI/issues/new?template=bug_report.yml) or [request a feature](https://github.com/Termix-SSH/CLI/issues/new?template=feature_request.yml). Problems with the Termix server or a plugin go in the [Termix repo](https://github.com/Termix-SSH/Termix/issues/new/choose) or that plugin's repo. Not sure where it goes? Open it in Termix and it will be moved.
 
-Please be as detailed as possible, preferably in English.
+Add as much detail as you can, in English if possible.
 
 For discussions and questions, join the [Discord](https://discord.gg/jVQGdvHDrf) server.
 
@@ -116,4 +116,4 @@ For discussions and questions, join the [Discord](https://discord.gg/jVQGdvHDrf)
 
 ## License
 
-Distributed under the Apache License Version 2.0. See [LICENSE](LICENSE) for more information.
+Apache License 2.0. See [LICENSE](LICENSE).
