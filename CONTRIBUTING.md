@@ -81,7 +81,7 @@ export TERMIX_TUNNEL_URL=http://localhost:30003    # tunnel
 
 `src/api/endpoints.ts` lists every endpoint the CLI calls. `test/drift.test.ts` checks them against the OpenAPI specs in `spec/`, so a renamed or removed route fails the tests instead of failing for a user.
 
-To refresh the specs, run `npm run sync` in a [Termix-Docs](https://github.com/Termix-SSH/Docs) checkout next to this one, then:
+To refresh the specs, run `npm run sync` in a [Docs](https://github.com/Termix-SSH/Docs) checkout next to this one, then:
 
 ```sh
 npm run sync:spec

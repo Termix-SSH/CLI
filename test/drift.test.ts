@@ -39,7 +39,7 @@ function specFor(plugin: string | undefined): OpenApiSpec {
  * the server and nothing noticed until a command failed for a user.
  *
  * Core routes are checked against core's spec and plugin routes against that
- * plugin's own. Refresh them with `node scripts/sync-spec.mjs <Termix-Docs>`.
+ * plugin's own. Refresh them with `node scripts/sync-spec.mjs <Docs>`.
  */
 describe("API drift", () => {
   it("has a vendored core specification to check against", () => {
