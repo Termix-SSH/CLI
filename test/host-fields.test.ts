@@ -61,6 +61,44 @@ describe("buildHostPayload", () => {
       /credential-id/i,
     );
   });
+
+  it("sets authType credential when --credential-id is given alone", () => {
+    expect(buildHostPayload({ credentialId: "5" })).toMatchObject({
+      authType: "credential",
+      credentialId: 5,
+    });
+  });
+
+  it("accepts every core auth type", () => {
+    for (const authType of ["password", "key", "agent", "none"]) {
+      expect(buildHostPayload({ authType })).toMatchObject({
+        authType,
+        credentialId: null,
+      });
+    }
+    expect(buildHostPayload({ authType: "credential" }).authType).toBe(
+      "credential",
+    );
+  });
+
+  it("clears the credential with --no-credential", () => {
+    expect(buildHostPayload({ credential: false }).credentialId).toBeNull();
+  });
+
+  it("points an empty --credential-id at --no-credential", () => {
+    expect(() => buildHostPayload({ credentialId: "" })).toThrow(
+      /Invalid --credential-id: "" \(use --no-credential/,
+    );
+  });
+
+  it("rejects conflicting credential flags", () => {
+    expect(() =>
+      buildHostPayload({ credentialId: "5", credential: false }),
+    ).toThrow(/either --credential-id or --no-credential/);
+    expect(() =>
+      buildHostPayload({ credentialId: "5", authType: "password" }),
+    ).toThrow(/--credential-id needs --auth-type credential/);
+  });
 });
 
 describe("hostToggleSettings", () => {
