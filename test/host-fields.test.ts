@@ -99,6 +99,15 @@ describe("buildHostPayload", () => {
       buildHostPayload({ credentialId: "5", authType: "password" }),
     ).toThrow(/--credential-id needs --auth-type credential/);
   });
+
+  it("refuses a key with --auth-type password, which would drop it", () => {
+    expect(() =>
+      buildHostPayload({ keyFile: "package.json", authType: "password" }),
+    ).toThrow(/--key-file would be dropped with --auth-type password/);
+    expect(
+      buildHostPayload({ keyFile: "package.json", authType: "key" }).authType,
+    ).toBe("key");
+  });
 });
 
 describe("hostToggleSettings", () => {

@@ -139,6 +139,12 @@ export function buildHostPayload(opts: HostFieldOpts): Record<string, unknown> {
       }
       body.credentialId = null;
     }
+    // Core keeps a password next to a key, but drops the key for password.
+    if (body.authType === "password" && body.key !== undefined) {
+      throw new UsageError(
+        "--key-file would be dropped with --auth-type password. Use --auth-type key, which keeps the password too.",
+      );
+    }
   } else if (body.credentialId) {
     body.authType = "credential";
   }
@@ -210,12 +216,16 @@ function parsePort(value: string): number {
   return port;
 }
 
-/** The auth type implied by the secret that was passed, if any. */
+/**
+ * The auth type implied by the secret that was passed, if any. A key wins
+ * over a password: core keeps the password next to a key, but drops the key
+ * for password auth.
+ */
 export function inferAuthType(
   body: Record<string, unknown>,
 ): string | undefined {
-  if (body.password !== undefined) return "password";
   if (body.key !== undefined) return "key";
+  if (body.password !== undefined) return "password";
   return undefined;
 }
 

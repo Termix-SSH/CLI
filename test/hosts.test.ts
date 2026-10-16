@@ -63,6 +63,12 @@ describe("hosts create", () => {
     expect(sent("POST").authType).toBe("key");
   });
 
+  it("keeps both secrets as key auth when given a password and a key", async () => {
+    await hosts(...base, "--password", "pw", "--key-file", "package.json");
+    expect(sent("POST")).toMatchObject({ authType: "key", password: "pw" });
+    expect(sent("POST").key).toBeTruthy();
+  });
+
   it("sends an explicit --auth-type that needs no secret", async () => {
     await hosts(...base, "--auth-type", "agent");
     expect(sent("POST")).toMatchObject({
