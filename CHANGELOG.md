@@ -7,6 +7,10 @@
 - `hosts create` and `update` take `--no-credential` to unbind a saved credential
 - termix login --sso signs in with single sign-on through your browser
 
+### Changed
+
+- Updated axios to 1.20.0
+
 ### Fixed
 
 - `hosts create` and `update` accept every core auth type: `password`, `key`, `credential`, `agent` and `none`
