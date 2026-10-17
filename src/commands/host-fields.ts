@@ -16,6 +16,8 @@ export interface HostFieldOpts {
   keyFile?: string;
   keyPassword?: string;
   credentialId?: string;
+  /** False when --no-credential is passed. */
+  credential?: boolean;
   folder?: string;
   tags?: string;
   enableTerminal?: boolean;
@@ -24,6 +26,9 @@ export interface HostFieldOpts {
   enableTunnel?: boolean;
 }
 
+/** The SSH auth types Termix core can connect with. */
+const AUTH_TYPES = ["password", "key", "credential", "agent", "none"];
+
 /** Attach the shared host field options to a command. */
 export function addHostFieldOptions(cmd: Command): Command {
   return cmd
@@ -31,7 +36,10 @@ export function addHostFieldOptions(cmd: Command): Command {
     .option("--ip <ip>", "Hostname or IP address")
     .option("--port <port>", "SSH port (default 22)")
     .option("--username <username>", "SSH username")
-    .option("--auth-type <type>", "Authentication type: password | key")
+    .option(
+      "--auth-type <type>",
+      `Authentication type: ${AUTH_TYPES.join(" | ")}. --credential-id implies credential`,
+    )
     .option("--key-file <path>", "Path to a private key file (authType=key)")
     .option(
       "--password <password>",
@@ -43,7 +51,11 @@ export function addHostFieldOptions(cmd: Command): Command {
     )
     .option(
       "--credential-id <id>",
-      "Use a saved shared credential instead of inline secrets",
+      "Use a saved shared credential instead of inline secrets (authType=credential)",
+    )
+    .option(
+      "--no-credential",
+      "Unbind the saved credential. Pass --auth-type too, unless --password or --key-file implies it",
     )
     .option("--folder <folder>", "Folder to place the host in")
     .option("--tags <tags>", "Comma-separated tags")
@@ -83,8 +95,6 @@ export function buildHostPayload(opts: HostFieldOpts): Record<string, unknown> {
   if (opts.ip !== undefined) body.ip = opts.ip;
   if (opts.port !== undefined) body.port = parsePort(opts.port);
   if (opts.username !== undefined) body.username = opts.username;
-  if (opts.authType !== undefined)
-    body.authType = validateAuthType(opts.authType);
 
   const password = resolveSecret(
     opts.password,
@@ -102,11 +112,41 @@ export function buildHostPayload(opts: HostFieldOpts): Record<string, unknown> {
 
   if (opts.keyFile !== undefined) body.key = readKeyFile(opts.keyFile);
   if (opts.credentialId !== undefined) {
+    if (opts.credential === false) {
+      throw new UsageError(
+        "Pass either --credential-id or --no-credential, not both.",
+      );
+    }
     const id = Number(opts.credentialId);
     if (!Number.isInteger(id) || id <= 0) {
-      throw new UsageError(`Invalid --credential-id: "${opts.credentialId}".`);
+      throw new UsageError(
+        `Invalid --credential-id: "${opts.credentialId}" (use --no-credential to unbind one).`,
+      );
     }
     body.credentialId = id;
+  }
+  if (opts.credential === false) body.credentialId = null;
+
+  // The server resolves a bound credential whatever the auth type says, so a
+  // host that does not sign in with a credential must not keep one bound.
+  if (opts.authType !== undefined) {
+    body.authType = validateAuthType(opts.authType);
+    if (body.authType !== "credential") {
+      if (body.credentialId) {
+        throw new UsageError(
+          "--credential-id needs --auth-type credential (or leave --auth-type out).",
+        );
+      }
+      body.credentialId = null;
+    }
+    // Core keeps a password next to a key, but drops the key for password.
+    if (body.authType === "password" && body.key !== undefined) {
+      throw new UsageError(
+        "--key-file would be dropped with --auth-type password. Use --auth-type key, which keeps the password too.",
+      );
+    }
+  } else if (body.credentialId) {
+    body.authType = "credential";
   }
   if (opts.folder !== undefined) body.folder = opts.folder;
   if (opts.tags !== undefined) body.tags = splitTags(opts.tags);
@@ -176,10 +216,35 @@ function parsePort(value: string): number {
   return port;
 }
 
-function validateAuthType(value: string): string {
-  if (value !== "password" && value !== "key") {
+/**
+ * The auth type implied by the secret that was passed, if any. A key wins
+ * over a password: core keeps the password next to a key, but drops the key
+ * for password auth.
+ */
+export function inferAuthType(
+  body: Record<string, unknown>,
+): string | undefined {
+  if (body.key !== undefined) return "key";
+  if (body.password !== undefined) return "password";
+  return undefined;
+}
+
+/**
+ * Core stores authType credential without a credentialId, but such a host
+ * cannot connect, so refuse to send one.
+ */
+export function assertCredentialBound(body: Record<string, unknown>): void {
+  if (body.authType === "credential" && !body.credentialId) {
     throw new UsageError(
-      `Invalid --auth-type: "${value}" (expected password or key).`,
+      "--auth-type credential needs a saved credential: pass --credential-id <id>.",
+    );
+  }
+}
+
+function validateAuthType(value: string): string {
+  if (!AUTH_TYPES.includes(value)) {
+    throw new UsageError(
+      `Invalid --auth-type: "${value}" (expected ${AUTH_TYPES.join(", ")}).`,
     );
   }
   return value;
