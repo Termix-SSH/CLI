@@ -5,7 +5,7 @@
 ### Added
 
 - `hosts create` and `update` take `--no-credential` to unbind a saved credential
-- termix login --sso signs in with single sign-on through your browser
+- `termix login --sso` signs in with single sign-on through your browser
 
 ### Changed
 
