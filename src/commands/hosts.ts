@@ -12,7 +12,9 @@ import {
 import {
   addHostFieldOptions,
   applyHostToggles,
+  assertCredentialBound,
   buildHostPayload,
+  inferAuthType,
   type HostFieldOpts,
 } from "./host-fields.js";
 
@@ -122,7 +124,7 @@ export function registerHostCommands(program: Command): void {
     hosts
       .command("create")
       .description(
-        "Create an SSH host. --ip and --username are required, plus one of --password, --key-file or --credential-id.",
+        "Create an SSH host. --ip and --username are required, plus --auth-type or one of --password, --key-file or --credential-id to infer it from.",
       ),
   ).action(async function (this: Command, opts: HostFieldOpts) {
     await run(async () => {
@@ -136,23 +138,16 @@ export function registerHostCommands(program: Command): void {
       // rather than a flag, and only the payload knows what actually resolved.
       const payload = buildHostPayload(opts);
 
-      // Require an auth method up front: without one the backend returns an
+      // Require an auth type up front: without one the backend returns an
       // opaque 500, so fail here with something actionable instead.
-      if (
-        payload.password === undefined &&
-        payload.key === undefined &&
-        payload.credentialId === undefined
-      ) {
+      payload.authType ??= inferAuthType(payload);
+      if (payload.authType === undefined) {
         throw new UsageError(
-          "`hosts create` needs an auth method: pass --password, --key-file or --credential-id " +
-            "(or set TERMIX_HOST_PASSWORD).",
+          "`hosts create` needs an auth method: pass --auth-type, --password, --key-file or " +
+            "--credential-id (or set TERMIX_HOST_PASSWORD).",
         );
       }
-
-      if (payload.authType === undefined) {
-        if (payload.password !== undefined) payload.authType = "password";
-        else if (payload.key !== undefined) payload.authType = "key";
-      }
+      assertCredentialBound(payload);
 
       const { client } = await createContext(this);
       const created = await client.request<HostRow>({
@@ -193,6 +188,23 @@ export function registerHostCommands(program: Command): void {
         path: `/host/db/host/${id}`,
       });
       const merged = { ...stripServerManaged(current), ...payload };
+
+      // Unbinding a credential from a host that signs in with one leaves it
+      // with no way in unless something says what replaces it.
+      if (
+        opts.credential === false &&
+        payload.authType === undefined &&
+        current.authType === "credential"
+      ) {
+        merged.authType = inferAuthType(payload);
+        if (merged.authType === undefined) {
+          throw new UsageError(
+            `Host ${id} signs in with a credential. Pass --auth-type with --no-credential ` +
+              "(or --password / --key-file).",
+          );
+        }
+      }
+      assertCredentialBound(merged);
 
       await client.request<HostRow>({
         method: "PUT",

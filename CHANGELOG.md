@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.2
+
+### Added
+
+- `hosts create` and `update` take `--no-credential` to unbind a saved credential
+- `termix login --sso` signs in with single sign-on through your browser
+
+### Changed
+
+- Updated axios to 1.20.0
+
+### Fixed
+
+- `hosts create` and `update` accept every core auth type: `password`, `key`, `credential`, `agent` and `none`
+- `--credential-id` sets the host's auth type to `credential` instead of leaving it on `password`
+- Switching a host to another auth type unbinds its saved credential
+- `hosts create` without `--auth-type` infers it from `--password`, `--key-file` or `--credential-id`, and fails with a clear message when it can't, instead of a server 500
+- `hosts create` with both `--password` and `--key-file` uses key auth and keeps both, and `--auth-type password` with `--key-file` is refused because the key would be dropped
+
 ## 1.1.1
 
 ### Fixed

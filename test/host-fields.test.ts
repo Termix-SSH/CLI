@@ -61,6 +61,53 @@ describe("buildHostPayload", () => {
       /credential-id/i,
     );
   });
+
+  it("sets authType credential when --credential-id is given alone", () => {
+    expect(buildHostPayload({ credentialId: "5" })).toMatchObject({
+      authType: "credential",
+      credentialId: 5,
+    });
+  });
+
+  it("accepts every core auth type", () => {
+    for (const authType of ["password", "key", "agent", "none"]) {
+      expect(buildHostPayload({ authType })).toMatchObject({
+        authType,
+        credentialId: null,
+      });
+    }
+    expect(buildHostPayload({ authType: "credential" }).authType).toBe(
+      "credential",
+    );
+  });
+
+  it("clears the credential with --no-credential", () => {
+    expect(buildHostPayload({ credential: false }).credentialId).toBeNull();
+  });
+
+  it("points an empty --credential-id at --no-credential", () => {
+    expect(() => buildHostPayload({ credentialId: "" })).toThrow(
+      /Invalid --credential-id: "" \(use --no-credential/,
+    );
+  });
+
+  it("rejects conflicting credential flags", () => {
+    expect(() =>
+      buildHostPayload({ credentialId: "5", credential: false }),
+    ).toThrow(/either --credential-id or --no-credential/);
+    expect(() =>
+      buildHostPayload({ credentialId: "5", authType: "password" }),
+    ).toThrow(/--credential-id needs --auth-type credential/);
+  });
+
+  it("refuses a key with --auth-type password, which would drop it", () => {
+    expect(() =>
+      buildHostPayload({ keyFile: "package.json", authType: "password" }),
+    ).toThrow(/--key-file would be dropped with --auth-type password/);
+    expect(
+      buildHostPayload({ keyFile: "package.json", authType: "key" }).authType,
+    ).toBe("key");
+  });
 });
 
 describe("hostToggleSettings", () => {
