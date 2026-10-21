@@ -11,6 +11,7 @@ import {
 } from "../core/output/index.js";
 import { parseId } from "./hosts.js";
 import { pluginPath } from "../api/features.js";
+import { registerGatewayCommands } from "./gateway.js";
 
 type StatusRow = Record<string, unknown>;
 
@@ -90,7 +91,7 @@ function endpointHostOf(connection: TunnelConnection): string {
   return (connection.endpointHost ?? connection.endpointIP ?? "").trim();
 }
 
-/** Saved tunnels live in the tunnels plugin's host settings. */
+/** Tunnels saved before plugin 1.2.0 sit in the host's plugin settings. */
 export function parseConnections(
   host: Omit<HostRecord, "id">,
 ): TunnelConnection[] {
@@ -106,6 +107,16 @@ export function parseConnections(
     }
   }
   return [];
+}
+
+function parseIndex(value: string): number {
+  const index = Number(value);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new UsageError(
+      `Invalid tunnel index: "${value}" (expected a non-negative integer).`,
+    );
+  }
+  return index;
 }
 
 function tunnelMode(connection: TunnelConnection): string {
@@ -178,6 +189,146 @@ async function loadHost(
   return { ...host, id: hostId };
 }
 
+/**
+ * A host's saved tunnels. Tunnels plugin 1.2.0 keeps them in its own table
+ * and serves them at /saved; older plugins keep them in the host settings.
+ */
+async function loadConnections(
+  client: TermixClient,
+  host: HostRecord,
+): Promise<TunnelConnection[]> {
+  try {
+    const saved = await client.request<
+      Array<{ hostId: number; connections?: TunnelConnection[] }>
+    >({ method: "GET", path: pluginPath("tunnels", "/saved") });
+    if (Array.isArray(saved)) {
+      return saved.find((entry) => entry.hostId === host.id)?.connections ?? [];
+    }
+  } catch (error) {
+    if (!(error instanceof TermixApiError && error.status === 404)) throw error;
+  }
+  return parseConnections(host);
+}
+
+/** Replaces a host's saved tunnels. Needs tunnels plugin 1.2.0 or newer. */
+async function saveConnections(
+  client: TermixClient,
+  hostId: number,
+  connections: TunnelConnection[],
+): Promise<void> {
+  try {
+    await client.request({
+      method: "PUT",
+      path: pluginPath("tunnels", `/saved/${hostId}`),
+      data: { connections },
+    });
+  } catch (error) {
+    if (error instanceof TermixApiError && error.status === 404) {
+      throw new Error(
+        "This server's Tunnels plugin is older than 1.2.0, so tunnels can't be changed from the CLI. Update the plugin.",
+      );
+    }
+    throw error;
+  }
+}
+
+export interface TunnelOptions {
+  mode?: string;
+  sourcePort?: string;
+  endpointHost?: string;
+  endpointPort?: string;
+  bindHost?: string;
+  maxRetries?: string;
+  retryInterval?: string;
+  autoStart?: boolean;
+}
+
+function parsePort(value: string, flag: string): number {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new UsageError(`Invalid ${flag}: "${value}" (expected 1-65535).`);
+  }
+  return port;
+}
+
+function parseCount(value: string, flag: string): number {
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 0) {
+    throw new UsageError(
+      `Invalid ${flag}: "${value}" (expected a whole number).`,
+    );
+  }
+  return count;
+}
+
+/**
+ * A saved tunnel from the command's options. With a base (an edit), only the
+ * given options change.
+ */
+export function buildConnection(
+  opts: TunnelOptions,
+  base?: TunnelConnection,
+): TunnelConnection {
+  const next: TunnelConnection = base
+    ? { ...base }
+    : {
+        scope: "s2s",
+        mode: "local",
+        bindHost: "127.0.0.1",
+        maxRetries: 3,
+        retryInterval: 10,
+        autoStart: false,
+      };
+
+  if (opts.mode !== undefined) {
+    if (!["local", "remote", "dynamic"].includes(opts.mode)) {
+      throw new UsageError(
+        `Invalid --mode: "${opts.mode}" (expected local, remote or dynamic).`,
+      );
+    }
+    next.mode = opts.mode;
+    next.tunnelType = opts.mode === "remote" ? "remote" : "local";
+  }
+  if (opts.sourcePort !== undefined) {
+    next.sourcePort = parsePort(opts.sourcePort, "--source-port");
+  }
+  if (opts.endpointHost !== undefined) next.endpointHost = opts.endpointHost;
+  if (opts.endpointPort !== undefined) {
+    next.endpointPort = parsePort(opts.endpointPort, "--endpoint-port");
+  }
+  if (opts.bindHost !== undefined) next.bindHost = opts.bindHost;
+  if (opts.maxRetries !== undefined) {
+    next.maxRetries = parseCount(opts.maxRetries, "--max-retries");
+  }
+  if (opts.retryInterval !== undefined) {
+    next.retryInterval = parseCount(opts.retryInterval, "--retry-interval");
+  }
+  if (opts.autoStart !== undefined) next.autoStart = opts.autoStart;
+
+  if (next.sourcePort === undefined) {
+    throw new UsageError("A tunnel needs --source-port.");
+  }
+  if (tunnelMode(next) !== "dynamic" && next.endpointPort === undefined) {
+    throw new UsageError(
+      "A tunnel needs --endpoint-port unless it is dynamic.",
+    );
+  }
+  return next;
+}
+
+function withTunnelOptions(command: Command): Command {
+  return command
+    .option("--mode <mode>", "local, remote or dynamic")
+    .option("--source-port <port>", "Port the tunnel listens on")
+    .option("--endpoint-host <host>", "Where the tunnel goes")
+    .option("--endpoint-port <port>", "Port on the endpoint")
+    .option("--bind-host <address>", "Address the tunnel listens on")
+    .option("--max-retries <count>", "How many times to retry")
+    .option("--retry-interval <seconds>", "Seconds between retries")
+    .option("--auto-start", "Start the tunnel when Termix starts")
+    .option("--no-auto-start", "Do not start it when Termix starts");
+}
+
 export function registerTunnelCommands(program: Command): void {
   const tunnel = program
     .command("tunnel")
@@ -215,14 +366,16 @@ export function registerTunnelCommands(program: Command): void {
         await requireFeature("tunnels");
         const host = await loadHost(client, hostId);
 
-        const rows = parseConnections(host).map((connection, index) => ({
-          index,
-          name: buildTunnelName(host, index, connection),
-          mode: tunnelMode(connection),
-          sourcePort: connection.sourcePort,
-          endpointHost: endpointHostOf(connection),
-          endpointPort: connection.endpointPort,
-        }));
+        const rows = (await loadConnections(client, host)).map(
+          (connection, index) => ({
+            index,
+            name: buildTunnelName(host, index, connection),
+            mode: tunnelMode(connection),
+            sourcePort: connection.sourcePort,
+            endpointHost: endpointHostOf(connection),
+            endpointPort: connection.endpointPort,
+          }),
+        );
 
         printList(
           rows,
@@ -265,7 +418,7 @@ export function registerTunnelCommands(program: Command): void {
         await requireFeature("tunnels");
         const host = await loadHost(client, hostId);
 
-        const connection = parseConnections(host)[index];
+        const connection = (await loadConnections(client, host))[index];
         if (!connection) {
           throw new UsageError(
             `Host ${hostId} has no tunnel at index ${index}. Run \`termix tunnel show ${hostId}\`.`,
@@ -294,6 +447,106 @@ export function registerTunnelCommands(program: Command): void {
         );
       });
     });
+
+  withTunnelOptions(
+    tunnel
+      .command("add <hostId>")
+      .description(
+        "Add a tunnel to a host. Tunnels must be turned on for the host.",
+      ),
+  ).action(async function (
+    this: Command,
+    hostIdArg: string,
+    opts: TunnelOptions,
+  ) {
+    await run(async () => {
+      const hostId = parseId(hostIdArg);
+      const connection = buildConnection(opts);
+      const { client, requireFeature } = await createContext(this);
+      await requireFeature("tunnels");
+      const host = await loadHost(client, hostId);
+      if (host.pluginSettings?.tunnels?.enableTunnel !== true) {
+        throw new UsageError(
+          `Tunnels are off for host ${hostId}. Turn on Enable Tunneling for it first.`,
+        );
+      }
+      const connections = await loadConnections(client, host);
+      await saveConnections(client, hostId, [...connections, connection]);
+      const index = connections.length;
+      printResult(`Added tunnel ${index} to host ${hostId}.`, {
+        hostId,
+        index,
+      });
+    });
+  });
+
+  withTunnelOptions(
+    tunnel
+      .command("edit <hostId> <index>")
+      .description("Change a tunnel. Only the options you give are changed."),
+  ).action(async function (
+    this: Command,
+    hostIdArg: string,
+    indexArg: string,
+    opts: TunnelOptions,
+  ) {
+    await run(async () => {
+      const hostId = parseId(hostIdArg);
+      const index = parseIndex(indexArg);
+      const { client, requireFeature } = await createContext(this);
+      await requireFeature("tunnels");
+      const host = await loadHost(client, hostId);
+      const connections = await loadConnections(client, host);
+      const current = connections[index];
+      if (!current) {
+        throw new UsageError(
+          `Host ${hostId} has no tunnel at index ${index}. Run \`termix tunnel show ${hostId}\`.`,
+        );
+      }
+      const next = connections.map((c, i) =>
+        i === index ? buildConnection(opts, current) : c,
+      );
+      await saveConnections(client, hostId, next);
+      printResult(`Changed tunnel ${index} on host ${hostId}.`, {
+        hostId,
+        index,
+      });
+    });
+  });
+
+  tunnel
+    .command("remove <hostId> <index>")
+    .description("Delete a tunnel from a host.")
+    .action(async function (
+      this: Command,
+      hostIdArg: string,
+      indexArg: string,
+    ) {
+      await run(async () => {
+        const hostId = parseId(hostIdArg);
+        const index = parseIndex(indexArg);
+        const { client, requireFeature } = await createContext(this);
+        await requireFeature("tunnels");
+        const host = await loadHost(client, hostId);
+        const connections = await loadConnections(client, host);
+        if (!connections[index]) {
+          throw new UsageError(
+            `Host ${hostId} has no tunnel at index ${index}. Run \`termix tunnel show ${hostId}\`.`,
+          );
+        }
+        await saveConnections(
+          client,
+          hostId,
+          connections.filter((_, i) => i !== index),
+        );
+        printResult(`Removed tunnel ${index} from host ${hostId}.`, {
+          hostId,
+          index,
+        });
+      });
+    });
+
+  registerGatewayCommands(tunnel);
 
   tunnel
     .command("stop <name>")

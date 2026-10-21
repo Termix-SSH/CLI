@@ -129,6 +129,28 @@ export const ENDPOINTS: EndpointRef[] = [
   plugin("tunnels", "get", "/status/{tunnelName}", "tunnel start (wait)"),
   plugin("tunnels", "post", "/connect", "tunnel start"),
   plugin("tunnels", "post", "/disconnect", "tunnel stop"),
+  plugin("tunnels", "get", "/saved", "tunnel show, add, edit, remove"),
+  plugin("tunnels", "put", "/saved/{hostId}", "tunnel add, edit, remove"),
+  plugin("tunnels", "get", "/gateways", "tunnel gateway list"),
+  plugin("tunnels", "post", "/gateways", "tunnel gateway create"),
+  plugin("tunnels", "get", "/gateways/{id}", "tunnel gateway show"),
+  plugin("tunnels", "delete", "/gateways/{id}", "tunnel gateway remove"),
+  plugin("tunnels", "post", "/gateways/{id}/apply", "tunnel gateway apply"),
+  plugin("tunnels", "post", "/gateways/{id}/check", "tunnel gateway check"),
+  plugin("tunnels", "post", "/gateways/{id}/scan", "tunnel gateway scan"),
+  plugin("tunnels", "post", "/gateways/{id}/ports", "tunnel gateway port add"),
+  plugin(
+    "tunnels",
+    "patch",
+    "/gateways/{id}/ports/{portId}",
+    "tunnel gateway port enable, disable",
+  ),
+  plugin(
+    "tunnels",
+    "delete",
+    "/gateways/{id}/ports/{portId}",
+    "tunnel gateway port remove",
+  ),
 
   // Docker
   plugin("docker", "post", "/ssh/connect", "docker (session setup)"),
