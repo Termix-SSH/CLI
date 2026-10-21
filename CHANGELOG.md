@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+
+- `tunnel add`, `tunnel edit` and `tunnel remove` change the tunnels saved on a host
+- `tunnel gateway` manages WireGuard gateways: `list`, `show`, `create`, `apply`, `check`, `scan` and `remove`, plus `port add`, `port enable`, `port disable` and `port remove`
+
+### Changed
+
+- `tunnel show` and `tunnel start` read tunnels from the Tunnels plugin 1.2.0, and still work with older plugins
+
 ## 1.1.2
 
 ### Added

@@ -33,7 +33,7 @@ The Termix CLI talks to your [Termix](https://github.com/Termix-SSH/Termix) serv
 - Interactive SSH terminal with `termix ssh`, over the same connection the web UI uses
 - One-off remote commands with `termix exec`, exiting with the remote exit code
 - File browsing and transfer over SFTP
-- SSH tunnel and Docker container control
+- SSH tunnel, WireGuard gateway and Docker container control
 - Fleets, including running a command across every host at once
 - Host, credential and snippet management, with import and export
 - API keys and host enrollment for scripts, CI and AI agents
