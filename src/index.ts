@@ -21,6 +21,7 @@ import { registerApiKeyCommands } from "./commands/api-keys.js";
 import { registerMiscCommands } from "./commands/misc.js";
 import { registerPluginCommands } from "./commands/plugins.js";
 import { registerApiCommands } from "./commands/api.js";
+import { registerOpsCommands } from "./commands/ops.js";
 
 const program = new Command();
 
@@ -61,6 +62,7 @@ registerAdminCommands(program);
 registerApiKeyCommands(program);
 registerMiscCommands(program);
 registerPluginCommands(program);
+registerOpsCommands(program);
 registerApiCommands(program);
 
 // Commander exits the process itself; take it over so every path leaves

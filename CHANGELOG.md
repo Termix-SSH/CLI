@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+### Added
+
+- `termix ops` (or `termix actions`) lists, describes and runs the actions plugins offer, on one host or many, with dry runs, run history, approvals and cancel
+- `termix api-keys create --scope` makes a key limited to actions
+- Exit code 9 when an action waits for approval, and 10 when it worked on some hosts and failed on others
+
 ## 1.2.0
 
 ### Added
