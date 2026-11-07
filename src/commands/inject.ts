@@ -12,7 +12,7 @@ export function normalizeEnvName(name: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
-/** Replace sensitive secrets in stdout/stderr with a redacted placeholder */
+/** Replace sensitive secrets in text with a redacted placeholder */
 export function maskSecrets(
   chunk: Buffer | string,
   sortedSecrets: string[],
@@ -26,7 +26,50 @@ export function maskSecrets(
   return str;
 }
 
-interface TermixCredentialRaw {
+/**
+ * Handles output stream masking across chunk boundaries by retaining up to
+ * (maxSecretLength - 1) bytes at the end of each chunk.
+ */
+export class StreamMasker {
+  private remainder = "";
+  private readonly keepLen: number;
+  private readonly sortedSecrets: string[];
+
+  constructor(sortedSecrets: string[]) {
+    this.sortedSecrets = sortedSecrets.filter((s) => Boolean(s));
+    const maxLen = this.sortedSecrets.reduce(
+      (max, s) => Math.max(max, s.length),
+      0,
+    );
+    this.keepLen = maxLen > 1 ? maxLen - 1 : 0;
+  }
+
+  process(chunk: Buffer | string): string {
+    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    const full = this.remainder + text;
+    const masked = maskSecrets(full, this.sortedSecrets);
+    if (this.keepLen === 0) {
+      this.remainder = "";
+      return masked;
+    }
+    if (masked.length <= this.keepLen) {
+      this.remainder = masked;
+      return "";
+    }
+    const safeLen = masked.length - this.keepLen;
+    const toEmit = masked.slice(0, safeLen);
+    this.remainder = masked.slice(safeLen);
+    return toEmit;
+  }
+
+  flush(): string {
+    const rem = this.remainder;
+    this.remainder = "";
+    return rem ? maskSecrets(rem, this.sortedSecrets) : "";
+  }
+}
+
+export interface TermixCredentialRaw {
   id: number;
   name: string;
   username?: string | null;
@@ -37,47 +80,128 @@ interface TermixCredentialRaw {
   privateKey?: string | null;
 }
 
+export function buildInjectedEnv(
+  credentials: TermixCredentialRaw[],
+  options: { names?: boolean } = {},
+): Record<string, string> {
+  const injectedEnv: Record<string, string> = {};
+
+  for (const cred of credentials) {
+    const cid = cred.id;
+    const username = cred.username || "";
+    const password = cred.password || "";
+    const privateKey = cred.key || cred.privateKey || "";
+
+    if (cred.authType === "key" && !privateKey) {
+      throw new UsageError(
+        `Credential ${cid} ("${cred.name}") is of type "key" but contains no private key.`,
+      );
+    }
+
+    // 1. By ID: strictly TERMIX_<ID>_USERNAME, TERMIX_<ID>_PASSWORD, TERMIX_<ID>_KEY
+    if (username) {
+      injectedEnv[`TERMIX_${cid}_USERNAME`] = username;
+    }
+    if (password) {
+      injectedEnv[`TERMIX_${cid}_PASSWORD`] = password;
+    }
+    if (privateKey) {
+      injectedEnv[`TERMIX_${cid}_KEY`] = privateKey;
+    }
+
+    // 2. By Normalized Name (only when --names is enabled)
+    if (options.names) {
+      const baseName = normalizeEnvName(cred.name || `CREDENTIAL_${cid}`);
+      const nameCandidates: Record<string, string> = {};
+
+      if (username) {
+        nameCandidates[`${baseName}_USERNAME`] = username;
+      }
+      if (password) {
+        nameCandidates[`${baseName}_PASSWORD`] = password;
+        nameCandidates[baseName] = password;
+      }
+      if (privateKey) {
+        nameCandidates[`${baseName}_KEY`] = privateKey;
+        if (!password) {
+          nameCandidates[baseName] = privateKey;
+        }
+      }
+
+      for (const [key, val] of Object.entries(nameCandidates)) {
+        if (key in process.env) {
+          throw new UsageError(
+            `Refusing to overwrite existing environment variable "${key}" from credential "${cred.name}".`,
+          );
+        }
+        if (key in injectedEnv) {
+          throw new UsageError(
+            `Duplicate environment variable "${key}" from credential "${cred.name}".`,
+          );
+        }
+        injectedEnv[key] = val;
+      }
+    }
+  }
+
+  return injectedEnv;
+}
+
 export function registerInjectCommands(program: Command): void {
   program
-    .command("inject [args...]")
+    .command("inject <targets...>")
     .description(
       "Fetch credentials from Termix and inject them as environment variables into a command in memory.\n" +
         "Usage: termix inject credential <ids...> -- <command...>\n" +
-        "   or: termix inject <ids...> -- <command...>",
+        "   or: termix inject [options] <ids...> -- <command...>",
     )
-    .allowUnknownOption()
-    .action(async function (this: Command) {
+    .option(
+      "--names",
+      "Inject credentials as named variables (e.g. STRIPE_API_KEY) in addition to IDs",
+    )
+    .option(
+      "--mask",
+      "Redact secrets from stdout and stderr output in real time",
+    )
+    .passThroughOptions()
+    .action(async function (
+      this: Command,
+      targets: string[],
+      options: { names?: boolean; mask?: boolean },
+    ) {
       try {
-        const rawArgs = process.argv;
-        const injectIdx = rawArgs.indexOf("inject");
-        if (injectIdx === -1) {
-          throw new UsageError("Invalid command invocation.");
-        }
-
-        const argsAfterInject = rawArgs.slice(injectIdx + 1);
-        const dashDashIdx = argsAfterInject.indexOf("--");
-
+        const dashDashIdx = targets.indexOf("--");
         if (dashDashIdx === -1) {
           throw new UsageError(
             "Missing '--' separator before the command to run.\n" +
-              "Example: termix inject credential 1 2 -- python script.py",
+              "Example: termix inject 1 2 -- python script.py",
           );
         }
 
-        const targetTokens = argsAfterInject.slice(0, dashDashIdx);
-        const commandParts = argsAfterInject.slice(dashDashIdx + 1);
+        const targetTokens = targets.slice(0, dashDashIdx);
+        const commandParts = targets.slice(dashDashIdx + 1);
 
         if (commandParts.length === 0) {
           throw new UsageError("No command specified after '--'.");
         }
 
-        // Filter out keyword 'credential' or 'credentials' if user passed it
-        const idStrings = targetTokens.filter(
-          (t) =>
-            t.toLowerCase() !== "credential" &&
-            t.toLowerCase() !== "credentials" &&
-            !t.startsWith("-"),
-        );
+        let useNames = Boolean(options.names);
+        let useMask = Boolean(options.mask);
+
+        // Filter out keyword 'credential'/'credentials' or options placed before '--'
+        const idStrings = targetTokens.filter((t) => {
+          const lower = t.toLowerCase();
+          if (lower === "credential" || lower === "credentials") return false;
+          if (lower === "--names") {
+            useNames = true;
+            return false;
+          }
+          if (lower === "--mask") {
+            useMask = true;
+            return false;
+          }
+          return !t.startsWith("-");
+        });
 
         if (idStrings.length === 0) {
           throw new UsageError(
@@ -98,11 +222,8 @@ export function registerInjectCommands(program: Command): void {
         }
 
         const { client } = await createContext(this);
-        const injectedEnv: Record<string, string> = {};
+        const credentials: TermixCredentialRaw[] = [];
         const secretsToMask: Set<string> = new Set();
-
-        // Fetch each credential from Termix
-        let exportedHostsCache: Array<Record<string, unknown>> | null = null;
 
         for (const cid of credentialIds) {
           let cred: TermixCredentialRaw;
@@ -117,89 +238,28 @@ export function registerInjectCommands(program: Command): void {
             );
           }
 
-          const baseName = normalizeEnvName(cred.name || `CREDENTIAL_${cid}`);
-          const username = cred.username || "";
+          credentials.push(cred);
+
           const password = cred.password || "";
-          let privateKey = cred.key || cred.privateKey || "";
+          const privateKey = cred.key || cred.privateKey || "";
 
-          // If authType is key and privateKey is not directly present, try resolving from export
-          if (cred.authType === "key" && !privateKey) {
-            if (exportedHostsCache === null) {
-              try {
-                const exp = await client.request<{
-                  hosts?: Array<Record<string, unknown>>;
-                }>({
-                  method: "GET",
-                  path: "/plugin-api/import-export/export",
-                });
-                exportedHostsCache = exp.hosts || [];
-              } catch {
-                exportedHostsCache = [];
+          if (useMask) {
+            if (password && password.length >= 4) {
+              secretsToMask.add(password);
+            }
+            if (privateKey && privateKey.length >= 10) {
+              secretsToMask.add(privateKey.trim());
+              for (const line of privateKey.split("\n")) {
+                const trimmed = line.trim();
+                if (trimmed.length >= 16 && !trimmed.startsWith("-----")) {
+                  secretsToMask.add(trimmed);
+                }
               }
-            }
-            const match = exportedHostsCache.find(
-              (h) =>
-                h.credentialId === cid && typeof h.key === "string" && h.key,
-            );
-            if (match && typeof match.key === "string") {
-              privateKey = match.key;
-            }
-          }
-
-          // Register secrets to mask from stdout/stderr output (min 4 chars to prevent accidental false positives)
-          if (password && password.length >= 4) {
-            secretsToMask.add(password);
-          }
-          if (privateKey && privateKey.length >= 10) {
-            secretsToMask.add(privateKey.trim());
-            // Also mask individual base64 lines of the key if split
-            for (const line of privateKey.split("\n")) {
-              const trimmed = line.trim();
-              if (trimmed.length >= 16 && !trimmed.startsWith("-----")) {
-                secretsToMask.add(trimmed);
-              }
-            }
-          }
-
-          // Inject into environment:
-          // 1. By ID
-          if (username) {
-            injectedEnv[`TERMIX_${cid}_USER`] = username;
-            injectedEnv[`TERMIX_CREDENTIAL_${cid}_USERNAME`] = username;
-          }
-          if (password) {
-            injectedEnv[`TERMIX_${cid}_PASS`] = password;
-            injectedEnv[`TERMIX_${cid}_PASSWORD`] = password;
-            injectedEnv[`TERMIX_CREDENTIAL_${cid}_PASSWORD`] = password;
-          }
-          if (privateKey) {
-            injectedEnv[`TERMIX_${cid}_KEY`] = privateKey;
-            injectedEnv[`TERMIX_CREDENTIAL_${cid}_PRIVATE_KEY`] = privateKey;
-          }
-
-          // 2. By Normalized Name
-          if (username) {
-            injectedEnv[`${baseName}_USER`] = username;
-            injectedEnv[`${baseName}_USERNAME`] = username;
-          }
-          if (password) {
-            injectedEnv[`${baseName}_PASS`] = password;
-            injectedEnv[`${baseName}_PASSWORD`] = password;
-            injectedEnv[baseName] = password;
-          }
-          if (privateKey) {
-            injectedEnv[`${baseName}_KEY`] = privateKey;
-            injectedEnv[`${baseName}_PRIVATE_KEY`] = privateKey;
-            if (!password) {
-              injectedEnv[baseName] = privateKey;
             }
           }
         }
 
-        // Sort secrets by length descending so longer substrings are masked first
-        const sortedSecrets = Array.from(secretsToMask).sort(
-          (a, b) => b.length - a.length,
-        );
+        const injectedEnv = buildInjectedEnv(credentials, { names: useNames });
 
         const bin = commandParts[0];
         if (!bin) {
@@ -207,38 +267,73 @@ export function registerInjectCommands(program: Command): void {
         }
         const cmdArgs = commandParts.slice(1);
 
-        // Spawn child process with piped output for real-time redaction/masking
+        const sortedSecrets = Array.from(secretsToMask).sort(
+          (a, b) => b.length - a.length,
+        );
+
+        const stdoutMasker = new StreamMasker(sortedSecrets);
+        const stderrMasker = new StreamMasker(sortedSecrets);
+
         const child: ChildProcess = spawn(bin, cmdArgs, {
-          stdio: ["inherit", "pipe", "pipe"],
+          stdio: useMask ? ["inherit", "pipe", "pipe"] : "inherit",
           env: {
             ...process.env,
             ...injectedEnv,
           },
         });
 
-        child.stdout?.on("data", (chunk: Buffer) => {
-          process.stdout.write(maskSecrets(chunk, sortedSecrets));
-        });
+        if (useMask) {
+          child.stdout?.on("data", (chunk: Buffer) => {
+            const out = stdoutMasker.process(chunk);
+            if (out) process.stdout.write(out);
+          });
 
-        child.stderr?.on("data", (chunk: Buffer) => {
-          process.stderr.write(maskSecrets(chunk, sortedSecrets));
-        });
+          child.stderr?.on("data", (chunk: Buffer) => {
+            const err = stderrMasker.process(chunk);
+            if (err) process.stderr.write(err);
+          });
+        }
 
         const forwardSignal = (sig: NodeJS.Signals): void => {
-          child.kill(sig);
+          if (child.pid && !child.killed) {
+            child.kill(sig);
+          }
         };
-        process.once("SIGINT", forwardSignal);
-        process.once("SIGTERM", forwardSignal);
 
-        child.on("close", (code: number | null) => {
-          process.off("SIGINT", forwardSignal);
-          process.off("SIGTERM", forwardSignal);
-          process.exit(code ?? ExitCode.OK);
-        });
+        const onSigInt = () => forwardSignal("SIGINT");
+        const onSigTerm = () => forwardSignal("SIGTERM");
+
+        process.on("SIGINT", onSigInt);
+        process.on("SIGTERM", onSigTerm);
+
+        child.on(
+          "close",
+          (code: number | null, signal: NodeJS.Signals | null) => {
+            process.off("SIGINT", onSigInt);
+            process.off("SIGTERM", onSigTerm);
+
+            if (useMask) {
+              const remOut = stdoutMasker.flush();
+              if (remOut) process.stdout.write(remOut);
+              const remErr = stderrMasker.flush();
+              if (remErr) process.stderr.write(remErr);
+            }
+
+            if (code !== null) {
+              process.exit(code);
+            } else if (signal === "SIGINT") {
+              process.exit(130);
+            } else if (signal === "SIGTERM") {
+              process.exit(143);
+            } else {
+              process.exit(ExitCode.OK);
+            }
+          },
+        );
 
         child.on("error", (err: Error) => {
-          process.off("SIGINT", forwardSignal);
-          process.off("SIGTERM", forwardSignal);
+          process.off("SIGINT", onSigInt);
+          process.off("SIGTERM", onSigTerm);
           fail(err, ExitCode.INTERNAL);
         });
       } catch (error) {

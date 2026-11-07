@@ -36,6 +36,7 @@ The Termix CLI talks to your [Termix](https://github.com/Termix-SSH/Termix) serv
 - SSH tunnel, WireGuard gateway and Docker container control
 - Fleets, including running a command across every host at once
 - Host, credential and snippet management, with import and export
+- In-memory credential injection with `termix inject` for zero-disk command execution
 - API keys and host enrollment for scripts, CI and AI agents
 - `termix api` for any route, including plugin routes the CLI has no command for yet
 - Table output on a terminal, JSON when piped, with documented exit codes
