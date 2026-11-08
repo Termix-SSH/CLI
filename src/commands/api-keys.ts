@@ -54,9 +54,13 @@ export function registerApiKeyCommands(program: Command): void {
     .requiredOption("--name <name>", "Human-readable name for the key")
     .requiredOption("--user <userId>", "Id of the user the key acts as")
     .option("--expires-at <date>", "Expiry as an ISO date; omit for no expiry")
+    .option(
+      "--scope <scope>",
+      "Limit the key to actions: actions-read or actions-run. Omit for full access",
+    )
     .action(async function (
       this: Command,
-      opts: { name: string; user: string; expiresAt?: string },
+      opts: { name: string; user: string; expiresAt?: string; scope?: string },
     ) {
       await run(async () => {
         if (opts.expiresAt && Number.isNaN(Date.parse(opts.expiresAt))) {
@@ -65,6 +69,7 @@ export function registerApiKeyCommands(program: Command): void {
           );
         }
 
+        const scopes = opts.scope ? [scopeOf(opts.scope)] : undefined;
         const { client } = await createContext(this);
         const created = await client.request<KeyRow>({
           method: "POST",
@@ -73,6 +78,7 @@ export function registerApiKeyCommands(program: Command): void {
             name: opts.name,
             userId: opts.user,
             ...(opts.expiresAt ? { expiresAt: opts.expiresAt } : {}),
+            ...(scopes ? { scopes } : {}),
           },
         });
 
@@ -105,4 +111,21 @@ export function registerApiKeyCommands(program: Command): void {
         printResult(`Revoked API key ${keyId}.`, { id: keyId });
       });
     });
+}
+
+/** The scope name the server stores, from the short form the CLI takes. */
+export function scopeOf(value: string): string {
+  const scopes: Record<string, string> = {
+    "actions-read": "operations:read",
+    "actions-run": "operations:run",
+    "operations:read": "operations:read",
+    "operations:run": "operations:run",
+  };
+  const scope = scopes[value];
+  if (!scope) {
+    throw new UsageError(
+      `Invalid --scope "${value}" (expected actions-read or actions-run).`,
+    );
+  }
+  return scope;
 }
