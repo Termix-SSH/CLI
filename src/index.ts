@@ -25,8 +25,6 @@ import { registerOpsCommands } from "./commands/ops.js";
 import { registerInjectCommands } from "./commands/inject.js";
 
 const program = new Command();
-program.enablePositionalOptions();
-
 program
   .name("termix")
   .description(

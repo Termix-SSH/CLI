@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
+import { Command } from "commander";
 import {
   normalizeEnvName,
   maskSecrets,
   StreamMasker,
   buildInjectedEnv,
+  registerInjectCommands,
   type TermixCredentialRaw,
 } from "../src/commands/inject.js";
-import { UsageError } from "../src/core/errors.js";
+import { UsageError, ExitCode } from "../src/core/errors.js";
 
 describe("inject command", () => {
   describe("normalizeEnvName", () => {
@@ -178,6 +180,25 @@ describe("inject command", () => {
       emitted += masker.flush();
 
       expect(emitted).toBe("Hello world! Just a normal log line.");
+    });
+  });
+
+  describe("command configuration and usage exit code", () => {
+    it("configures inject with allowUnknownOption so child command flags do not fail parsing", () => {
+      const program = new Command();
+      registerInjectCommands(program);
+      const inject = program.commands.find((c) => c.name() === "inject");
+      expect(inject).toBeDefined();
+      // @ts-expect-error commander internal property
+      expect(inject?._allowUnknownOption).toBe(true);
+    });
+
+    it("maps UsageError exitCode to ExitCode.USAGE (code 2)", () => {
+      const error = new UsageError(
+        "Missing '--' separator before the command to run.",
+      );
+      expect(error.exitCode).toBe(ExitCode.USAGE);
+      expect(error.exitCode).toBe(2);
     });
   });
 });

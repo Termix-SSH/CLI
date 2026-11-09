@@ -149,7 +149,7 @@ export function buildInjectedEnv(
 
 export function registerInjectCommands(program: Command): void {
   program
-    .command("inject <targets...>")
+    .command("inject [targets...]")
     .description(
       "Fetch credentials from Termix and inject them as environment variables into a command in memory.\n" +
         "Usage: termix inject credential <ids...> -- <command...>\n" +
@@ -163,14 +163,14 @@ export function registerInjectCommands(program: Command): void {
       "--mask",
       "Redact secrets from stdout and stderr output in real time",
     )
-    .passThroughOptions()
+    .allowUnknownOption()
     .action(async function (
       this: Command,
-      targets: string[],
+      targets: string[] = [],
       options: { names?: boolean; mask?: boolean },
     ) {
       try {
-        const dashDashIdx = targets.indexOf("--");
+        const dashDashIdx = process.argv.indexOf("--");
         if (dashDashIdx === -1) {
           throw new UsageError(
             "Missing '--' separator before the command to run.\n" +
@@ -178,8 +178,12 @@ export function registerInjectCommands(program: Command): void {
           );
         }
 
-        const targetTokens = targets.slice(0, dashDashIdx);
-        const commandParts = targets.slice(dashDashIdx + 1);
+        const injectIdx = process.argv.indexOf("inject");
+        const targetTokens =
+          injectIdx !== -1 && injectIdx < dashDashIdx
+            ? process.argv.slice(injectIdx + 1, dashDashIdx)
+            : targets;
+        const commandParts = process.argv.slice(dashDashIdx + 1);
 
         if (commandParts.length === 0) {
           throw new UsageError("No command specified after '--'.");
@@ -189,19 +193,20 @@ export function registerInjectCommands(program: Command): void {
         let useMask = Boolean(options.mask);
 
         // Filter out keyword 'credential'/'credentials' or options placed before '--'
-        const idStrings = targetTokens.filter((t) => {
+        const idStrings: string[] = [];
+        for (const t of targetTokens) {
           const lower = t.toLowerCase();
-          if (lower === "credential" || lower === "credentials") return false;
+          if (lower === "credential" || lower === "credentials") continue;
           if (lower === "--names") {
             useNames = true;
-            return false;
+            continue;
           }
           if (lower === "--mask") {
             useMask = true;
-            return false;
+            continue;
           }
-          return !t.startsWith("-");
-        });
+          idStrings.push(t);
+        }
 
         if (idStrings.length === 0) {
           throw new UsageError(
@@ -337,7 +342,11 @@ export function registerInjectCommands(program: Command): void {
           fail(err, ExitCode.INTERNAL);
         });
       } catch (error) {
-        fail(error, ExitCode.INTERNAL);
+        if (error instanceof UsageError) {
+          fail(error, ExitCode.USAGE);
+        } else {
+          fail(error, ExitCode.INTERNAL);
+        }
       }
     });
 }
