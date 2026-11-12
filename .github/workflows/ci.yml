@@ -37,7 +37,12 @@ jobs:
           node-version-file: ".nvmrc"
           cache: npm
 
-      - run: npm ci
+      - name: Lockfile lint
+        uses: Termix-SSH/Termix-Registry/.github/actions/supply-chain@main
+        with:
+          osv: "false"
+
+      - run: npm ci --ignore-scripts
 
       - run: npm run format:check
 
@@ -77,6 +82,6 @@ jobs:
           node-version-file: ".nvmrc"
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - run: npm run smoke

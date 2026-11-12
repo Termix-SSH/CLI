@@ -111,7 +111,7 @@ jobs:
           node-version-file: ".nvmrc"
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Lint and format
         run: |
@@ -259,7 +259,7 @@ jobs:
         with:
           node-version-file: ".nvmrc"
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - run: npm run verify
 
@@ -297,7 +297,7 @@ jobs:
           node-version-file: ".nvmrc"
           architecture: ${{ matrix.arch }}
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Build the standalone binary
         env:
@@ -409,7 +409,7 @@ jobs:
         # Trusted publishing needs npm 11.5 or newer, pinned to one release.
         run: npm install -g npm@11.21.2 # zizmor: ignore[adhoc-packages]
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - run: npm run build
 
