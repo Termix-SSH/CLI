@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1
+
+### Fixed
+
+- Updated zod to fix a security advisory
+
 ## 1.3.0
 
 ### Added
