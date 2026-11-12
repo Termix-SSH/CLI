@@ -2,6 +2,10 @@
 
 ## 1.3.1
 
+### Added
+
+- The binaries on each release carry signed build provenance you can check with `gh attestation verify`
+
 ### Fixed
 
 - Updated zod to fix a security advisory
