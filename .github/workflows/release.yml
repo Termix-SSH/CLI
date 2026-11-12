@@ -14,14 +14,14 @@ on:
           - Dry run
           - Skip npm
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 jobs:
   prep:
     name: Resolve version and validate notes
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.info.outputs.version }}
       release_tag: ${{ steps.info.outputs.release_tag }}
@@ -30,41 +30,48 @@ jobs:
       - name: Guard branch (release modes)
         if: ${{ inputs.mode != 'Overwrite release' && !startsWith(github.ref, 'refs/heads/dev-') }}
         run: |
-          echo "This mode must be run from a dev branch (got ${{ github.ref }})."
+          echo "This mode must be run from a dev branch (got $GITHUB_REF)."
           exit 1
 
       - name: Guard branch (overwrite mode)
         if: ${{ inputs.mode == 'Overwrite release' && github.ref != 'refs/heads/main' }}
         run: |
-          echo "Overwrite release must be run from main (got ${{ github.ref }})."
+          echo "Overwrite release must be run from main (got $GITHUB_REF)."
           exit 1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ".nvmrc"
 
       - name: Resolve version
         id: info
+        env:
+          MODE: ${{ inputs.mode }}
         run: |
-          if [ "${{ inputs.mode }}" = "Overwrite release" ]; then
+          if [ "$MODE" = "Overwrite release" ]; then
             DEV_BRANCH=""
             VERSION=$(node -p "require('./package.json').version")
           else
             DEV_BRANCH="${GITHUB_REF#refs/heads/}"
             VERSION=$(node scripts/parse-dev-branch.cjs "$DEV_BRANCH")
           fi
-          echo "dev_branch=$DEV_BRANCH" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "release_tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          {
+            echo "dev_branch=$DEV_BRANCH"
+            echo "version=$VERSION"
+            echo "release_tag=v$VERSION"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check CHANGELOG.md has notes for this version
+        env:
+          VERSION: ${{ steps.info.outputs.version }}
         run: |
           node scripts/generate-release-body.cjs \
-            --version "${{ steps.info.outputs.version }}" \
+            --version "$VERSION" \
             --changelog CHANGELOG.md > /dev/null
 
   normalize:
@@ -72,14 +79,34 @@ jobs:
     needs: [prep]
     if: ${{ inputs.mode != 'Overwrite release' }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    environment: ci
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prep.outputs.version }}
+      MODE: ${{ inputs.mode }}
+      DEV_BRANCH: ${{ needs.prep.outputs.dev_branch }}
     steps:
-      - uses: actions/checkout@v4
+      # The dev branch only takes signed commits or the Termix CI App.
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: Termix-SSH
+          repositories: CLI
+          permission-contents: write
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.prep.outputs.dev_branch }}
           fetch-depth: 0
-          token: ${{ github.token }}
+          token: ${{ steps.app.outputs.token }}
+          # The commit step pushes with it.
+          persist-credentials: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ".nvmrc"
           cache: npm
@@ -96,7 +123,7 @@ jobs:
       - run: npm test
 
       - name: Sync version
-        run: node scripts/sync-version.cjs --version "${{ needs.prep.outputs.version }}"
+        run: node scripts/sync-version.cjs --version "$VERSION"
 
       - name: Commit changes to the dev branch
         run: |
@@ -108,15 +135,15 @@ jobs:
             exit 0
           fi
 
-          if [ "${{ inputs.mode }}" = "Dry run" ]; then
-            echo "DRY RUN: would commit and push the following to ${{ needs.prep.outputs.dev_branch }}:"
+          if [ "$MODE" = "Dry run" ]; then
+            echo "DRY RUN: would commit and push the following to $DEV_BRANCH:"
             git --no-pager diff --stat
             exit 0
           fi
 
           git add -A
-          git commit -m "chore: lint, format, and bump version to ${{ needs.prep.outputs.version }}"
-          git push origin HEAD:"${{ needs.prep.outputs.dev_branch }}"
+          git commit -m "chore: lint, format, and bump version to $VERSION"
+          git push origin HEAD:"$DEV_BRANCH"
 
   merge-to-main:
     name: Merge to main
@@ -124,13 +151,19 @@ jobs:
     if: ${{ always() && needs.prep.result == 'success' && (needs.normalize.result == 'success' || needs.normalize.result == 'skipped') }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: ci
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prep.outputs.version }}
+      MODE: ${{ inputs.mode }}
+      DEV_BRANCH: ${{ needs.prep.outputs.dev_branch }}
     outputs:
       main_sha: ${{ steps.merge.outputs.main_sha }}
       build_ref: ${{ steps.merge.outputs.build_ref }}
     steps:
       - name: App token
         id: app
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.CI_APP_CLIENT_ID }}
           private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
@@ -140,18 +173,19 @@ jobs:
           permission-pull-requests: write
           permission-workflows: write
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ".nvmrc"
 
       - name: Generate the PR body
         run: |
           node scripts/generate-release-body.cjs \
-            --version "${{ needs.prep.outputs.version }}" \
+            --version "$VERSION" \
             --changelog CHANGELOG.md > PR_BODY.md
 
       - name: Open and squash-merge the PR to main
@@ -159,43 +193,46 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          DEV_BRANCH="${{ needs.prep.outputs.dev_branch }}"
-          TITLE="v${{ needs.prep.outputs.version }}"
+          TITLE="v$VERSION"
 
-          if [ "${{ inputs.mode }}" = "Overwrite release" ]; then
+          if [ "$MODE" = "Overwrite release" ]; then
             echo "OVERWRITE: no merge; building from main as-is."
             echo "build_ref=main" >> "$GITHUB_OUTPUT"
-            echo "main_sha=$(gh api repos/${{ github.repository }}/commits/main -q .sha)" >> "$GITHUB_OUTPUT"
+            echo "main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" -q .sha)" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ "${{ inputs.mode }}" = "Dry run" ]; then
+          if [ "$MODE" = "Dry run" ]; then
             echo "DRY RUN: would open and squash-merge a PR from $DEV_BRANCH into main."
             echo "DRY RUN: downstream jobs will build from $DEV_BRANCH instead."
-            echo "build_ref=$DEV_BRANCH" >> "$GITHUB_OUTPUT"
-            echo "main_sha=" >> "$GITHUB_OUTPUT"
+            {
+              echo "build_ref=$DEV_BRANCH"
+              echo "main_sha="
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --head "$DEV_BRANCH" --base main --state open --json number -q '.[0].number' || true)
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$DEV_BRANCH" --base main --state open --json number -q '.[0].number' || true)
           if [ -z "$PR_NUMBER" ]; then
-            PR_NUMBER=$(gh pr create --repo ${{ github.repository }} \
+            PR_NUMBER=$(gh pr create --repo "$GITHUB_REPOSITORY" \
               --base main --head "$DEV_BRANCH" \
               --title "$TITLE" --body-file PR_BODY.md \
               | grep -oE '[0-9]+$')
           fi
 
-          gh pr merge "$PR_NUMBER" --repo ${{ github.repository }} --squash --admin
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --admin
 
-          STATE=$(gh pr view "$PR_NUMBER" --repo ${{ github.repository }} --json state -q .state)
+          STATE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)
           if [ "$STATE" != "MERGED" ]; then
             echo "PR #$PR_NUMBER did not merge (state: $STATE)."
             exit 1
           fi
 
-          MAIN_SHA=$(gh api repos/${{ github.repository }}/commits/main -q .sha)
-          echo "main_sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
-          echo "build_ref=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" -q .sha)
+          {
+            echo "main_sha=$MAIN_SHA"
+            echo "build_ref=$MAIN_SHA"
+          } >> "$GITHUB_OUTPUT"
 
   verify:
     name: Verify on ${{ matrix.name }}
@@ -210,15 +247,17 @@ jobs:
           - name: Windows
             os: blacksmith-4vcpu-windows-2025
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.merge-to-main.outputs.build_ref }}
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ".nvmrc"
-          cache: npm
 
       - run: npm ci
 
@@ -244,23 +283,28 @@ jobs:
           - os: blacksmith-6vcpu-macos-latest
             asset: termix_macos_arm64
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.merge-to-main.outputs.build_ref }}
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      # No npm cache for release binaries.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ".nvmrc"
           architecture: ${{ matrix.arch }}
-          cache: npm
 
       - run: npm ci
 
       - name: Build the standalone binary
-        run: npm run build:binary -- ${{ matrix.asset }}
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: npm run build:binary -- "$ASSET"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.asset }}
           path: release/${{ matrix.asset }}
@@ -272,17 +316,25 @@ jobs:
     needs: [prep, merge-to-main, build-binaries]
     if: ${{ always() && needs.build-binaries.result == 'success' && inputs.mode != 'Dry run' }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      # Creates the release and uploads the binaries.
+      contents: write
+    env:
+      VERSION: ${{ needs.prep.outputs.version }}
+      TAG: ${{ needs.prep.outputs.release_tag }}
+      MAIN_SHA: ${{ needs.merge-to-main.outputs.main_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 1
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ".nvmrc"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: release
           merge-multiple: true
@@ -295,19 +347,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ needs.prep.outputs.release_tag }}"
-          if ! gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Overwrite release: no existing release $TAG to overwrite."
             exit 1
           fi
-          gh release view "$TAG" --repo ${{ github.repository }} --json assets -q '.assets[].name' | while read -r ASSET; do
-            [ -n "$ASSET" ] && gh release delete-asset "$TAG" "$ASSET" --repo ${{ github.repository }} --yes || true
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | while read -r ASSET; do
+            [ -n "$ASSET" ] && gh release delete-asset "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY" --yes || true
           done
 
       - name: Generate the release body
         run: |
           node scripts/generate-release-body.cjs \
-            --version "${{ needs.prep.outputs.version }}" \
+            --version "$VERSION" \
             --changelog CHANGELOG.md > RELEASE_BODY.md
           cat RELEASE_BODY.md
 
@@ -315,43 +366,48 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ needs.prep.outputs.release_tag }}"
-          TITLE="v${{ needs.prep.outputs.version }}"
-          if gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
-            gh release edit "$TAG" --repo ${{ github.repository }} \
+          TITLE="v$VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "$TITLE" --notes-file RELEASE_BODY.md
           else
-            gh release create "$TAG" --repo ${{ github.repository }} \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "$TITLE" --notes-file RELEASE_BODY.md \
-              --target "${{ needs.merge-to-main.outputs.main_sha }}"
+              --target "$MAIN_SHA"
           fi
 
       - name: Upload the binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ needs.prep.outputs.release_tag }}" \
-            release/* --repo ${{ github.repository }} --clobber
+          gh release upload "$TAG" \
+            release/* --repo "$GITHUB_REPOSITORY" --clobber
 
   publish-npm:
     name: Publish to npm
     needs: [prep, merge-to-main, create-release]
     if: ${{ always() && needs.create-release.result == 'success' && (inputs.mode == 'Everything' || inputs.mode == 'Overwrite release') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # npm trusted publishing with provenance.
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 1
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      # No npm cache in a job that publishes.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ".nvmrc"
-          cache: npm
           registry-url: https://registry.npmjs.org
 
       - name: Update npm
-        run: npm install -g npm@^11.19.0
+        # Trusted publishing needs npm 11.5 or newer, pinned to one release.
+        run: npm install -g npm@11.21.2 # zizmor: ignore[adhoc-packages]
 
       - run: npm ci
 
@@ -364,14 +420,22 @@ jobs:
     needs: [prep, merge-to-main, create-release, publish-npm]
     if: ${{ always() && (inputs.mode == 'Everything' || inputs.mode == 'Skip npm') && needs.merge-to-main.result == 'success' && needs.create-release.result == 'success' }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    environment: ci
+    permissions: {}
     steps:
-      - uses: actions/checkout@v4
+      # The dev branch only takes signed commits or the Termix CI App.
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          fetch-depth: 1
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: Termix-SSH
+          repositories: CLI
+          permission-contents: write
 
       - name: Delete the dev branch
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git push https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git \
-            --delete "${{ needs.prep.outputs.dev_branch }}" || true
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          DEV_BRANCH: ${{ needs.prep.outputs.dev_branch }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$DEV_BRANCH" || true
