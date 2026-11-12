@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - Everything
-          - Overwrite release
           - Dry run
           - Skip npm
 
@@ -27,16 +26,10 @@ jobs:
       release_tag: ${{ steps.info.outputs.release_tag }}
       dev_branch: ${{ steps.info.outputs.dev_branch }}
     steps:
-      - name: Guard branch (release modes)
-        if: ${{ inputs.mode != 'Overwrite release' && !startsWith(github.ref, 'refs/heads/dev-') }}
+      - name: Guard branch
+        if: ${{ !startsWith(github.ref, 'refs/heads/dev-') }}
         run: |
-          echo "This mode must be run from a dev branch (got $GITHUB_REF)."
-          exit 1
-
-      - name: Guard branch (overwrite mode)
-        if: ${{ inputs.mode == 'Overwrite release' && github.ref != 'refs/heads/main' }}
-        run: |
-          echo "Overwrite release must be run from main (got $GITHUB_REF)."
+          echo "Run this from a dev branch (got $GITHUB_REF)."
           exit 1
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -50,16 +43,9 @@ jobs:
 
       - name: Resolve version
         id: info
-        env:
-          MODE: ${{ inputs.mode }}
         run: |
-          if [ "$MODE" = "Overwrite release" ]; then
-            DEV_BRANCH=""
-            VERSION=$(node -p "require('./package.json').version")
-          else
-            DEV_BRANCH="${GITHUB_REF#refs/heads/}"
-            VERSION=$(node scripts/parse-dev-branch.cjs "$DEV_BRANCH")
-          fi
+          DEV_BRANCH="${GITHUB_REF#refs/heads/}"
+          VERSION=$(node scripts/parse-dev-branch.cjs "$DEV_BRANCH")
           {
             echo "dev_branch=$DEV_BRANCH"
             echo "version=$VERSION"
@@ -77,7 +63,6 @@ jobs:
   normalize:
     name: Lint, test and sync the version
     needs: [prep]
-    if: ${{ inputs.mode != 'Overwrite release' }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: ci
     permissions:
@@ -194,13 +179,6 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           TITLE="v$VERSION"
-
-          if [ "$MODE" = "Overwrite release" ]; then
-            echo "OVERWRITE: no merge; building from main as-is."
-            echo "build_ref=main" >> "$GITHUB_OUTPUT"
-            echo "main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" -q .sha)" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           if [ "$MODE" = "Dry run" ]; then
             echo "DRY RUN: would open and squash-merge a PR from $DEV_BRANCH into main."
@@ -342,19 +320,6 @@ jobs:
       - name: List the collected assets
         run: ls -la release
 
-      - name: Clear existing assets (overwrite mode)
-        if: ${{ inputs.mode == 'Overwrite release' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Overwrite release: no existing release $TAG to overwrite."
-            exit 1
-          fi
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | while read -r ASSET; do
-            [ -n "$ASSET" ] && gh release delete-asset "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY" --yes || true
-          done
-
       - name: Generate the release body
         run: |
           node scripts/generate-release-body.cjs \
@@ -362,31 +327,39 @@ jobs:
             --changelog CHANGELOG.md > RELEASE_BODY.md
           cat RELEASE_BODY.md
 
-      - name: Create or update the release
+      - name: Check the version is free
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TITLE="v$VERSION"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "$TITLE" --notes-file RELEASE_BODY.md
-          else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "$TITLE" --notes-file RELEASE_BODY.md \
-              --target "$MAIN_SHA"
+            if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)" != "true" ]; then
+              echo "$TAG is already published and a release can't change. Bump the version and run again."
+              exit 1
+            fi
+            echo "Deleting an old draft of $TAG from a run that stopped."
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
           fi
 
-      - name: Upload the binaries
+      - name: Create the draft, upload the binaries and publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$TAG" \
-            release/* --repo "$GITHUB_REPOSITORY" --clobber
+          # Draft first, so nobody sees it before every binary is on it.
+          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" \
+            --draft --title "v$VERSION" --notes-file RELEASE_BODY.md --target "$MAIN_SHA"
+          want=$(find release -type f | wc -l)
+          have=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets | length')
+          if [ "$want" != "$have" ]; then
+            echo "The draft has $have files, expected $want. Not publishing."
+            exit 1
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Published $TAG."
 
   publish-npm:
     name: Publish to npm
     needs: [prep, merge-to-main, create-release]
-    if: ${{ always() && needs.create-release.result == 'success' && (inputs.mode == 'Everything' || inputs.mode == 'Overwrite release') }}
+    if: ${{ always() && needs.create-release.result == 'success' && inputs.mode == 'Everything' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
