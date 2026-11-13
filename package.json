@@ -58,7 +58,7 @@
     "axios": "^1.19.0",
     "commander": "^14.0.0",
     "ws": "^8.21.3",
-    "zod": "^3.25.76"
+    "zod": "^4.6.6"
   },
   "optionalDependencies": {
     "keytar": "^7.9.0"
