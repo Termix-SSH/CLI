@@ -169,7 +169,7 @@ try {
       throw new Error("Expected a non-zero exit");
     } catch (error) {
       if (error.status !== 2) {
-        throw new Error(`Exited ${error.status}, expected 2`);
+        throw new Error(`Exited ${error.status}, expected 2`, { cause: error });
       }
     }
   });
@@ -188,7 +188,7 @@ try {
       throw new Error("Expected a non-zero exit");
     } catch (error) {
       if (error.status !== 6) {
-        throw new Error(`Exited ${error.status}, expected 6`);
+        throw new Error(`Exited ${error.status}, expected 6`, { cause: error });
       }
     }
   });
@@ -212,7 +212,9 @@ try {
     } catch (error) {
       // A non-zero exit is expected here; only stdout content matters.
       if (error.stdout && error.stdout.trim()) {
-        throw new Error(`stdout should be empty, got: ${error.stdout}`);
+        throw new Error(`stdout should be empty, got: ${error.stdout}`, {
+          cause: error,
+        });
       }
     }
   });

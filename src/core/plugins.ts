@@ -42,7 +42,7 @@ async function fetchPlugins(client: TermixClient): Promise<ServerPlugin[]> {
     data = await client.request({ method: "GET", path: "/plugins" });
   } catch (error) {
     if (error instanceof TermixApiError && error.status === 404) {
-      throw new Error(OLD_SERVER);
+      throw new Error(OLD_SERVER, { cause: error });
     }
     throw error;
   }
