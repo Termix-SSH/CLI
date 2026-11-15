@@ -25,11 +25,9 @@ const releaseDir = path.join(root, "release");
 // The CommonJS build, not the ESM one npm ships: SEA only accepts CJS.
 const bundle = path.join(buildDir, "cli.cjs");
 
+// No shell: a path with & or | in it must stay one argument.
 function run(command, args, options = {}) {
-  const [file, argv] = isWindows
-    ? ["cmd.exe", ["/d", "/s", "/c", command, ...args]]
-    : [command, args];
-  return execFileSync(file, argv, {
+  return execFileSync(command, args, {
     encoding: "utf8",
     stdio: "inherit",
     ...options,
@@ -77,7 +75,7 @@ if (process.platform === "darwin") {
 
 process.stdout.write("Injecting the application into the runtime...\n");
 const postjectArgs = [
-  "postject",
+  path.join(root, "node_modules", "postject", "dist", "cli.js"),
   target,
   "NODE_SEA_BLOB",
   blobPath,
@@ -87,7 +85,7 @@ const postjectArgs = [
 if (process.platform === "darwin") {
   postjectArgs.push("--macho-segment-name", "NODE_SEA");
 }
-run(isWindows ? "npx.cmd" : "npx", postjectArgs);
+run(process.execPath, postjectArgs);
 
 if (process.platform === "darwin") {
   run("codesign", ["--sign", "-", target]);
