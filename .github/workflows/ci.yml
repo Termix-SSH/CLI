@@ -20,9 +20,9 @@ jobs:
       matrix:
         include:
           - name: Linux
-            os: blacksmith-2vcpu-ubuntu-2404
+            os: ubuntu-24.04
           - name: Windows
-            os: blacksmith-4vcpu-windows-2025
+            os: windows-2025
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -64,9 +64,9 @@ jobs:
       matrix:
         include:
           - name: Linux
-            os: blacksmith-2vcpu-ubuntu-2404
+            os: ubuntu-24.04
           - name: Windows
-            os: blacksmith-4vcpu-windows-2025
+            os: windows-2025
     runs-on: ${{ matrix.os }}
     needs: check
     permissions:
