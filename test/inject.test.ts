@@ -5,12 +5,39 @@ import {
   maskSecrets,
   StreamMasker,
   buildInjectedEnv,
+  childExitCode,
   registerInjectCommands,
   type TermixCredentialRaw,
 } from "../src/commands/inject.js";
 import { UsageError, ExitCode } from "../src/core/errors.js";
 
 describe("inject command", () => {
+  describe("childExitCode", () => {
+    it("passes the child's own exit code through", () => {
+      expect(childExitCode(0, null)).toBe(0);
+      expect(childExitCode(3, null)).toBe(3);
+    });
+    it("exits 128 plus the signal number when the child was killed", () => {
+      expect(childExitCode(null, "SIGINT")).toBe(130);
+      expect(childExitCode(null, "SIGTERM")).toBe(143);
+      expect(childExitCode(null, "SIGKILL")).toBe(137);
+      expect(childExitCode(null, "SIGHUP")).toBe(129);
+    });
+    it("never reports success without a code or signal", () => {
+      expect(childExitCode(null, null)).toBe(1);
+    });
+  });
+
+  it("keeps a multi byte character split across chunks", () => {
+    const masker = new StreamMasker(["secret"]);
+    const bytes = Buffer.from("café secret", "utf8");
+    const out =
+      masker.process(bytes.subarray(0, 4)) +
+      masker.process(bytes.subarray(4)) +
+      masker.flush();
+    expect(out).toBe("café [REDACTED_BY_TERMIX]");
+  });
+
   describe("normalizeEnvName", () => {
     it("converts spaces, hyphens and special chars to underscores", () => {
       expect(normalizeEnvName("Stripe API-Key#prod")).toBe(

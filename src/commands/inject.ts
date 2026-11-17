@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { constants } from "node:os";
+import { StringDecoder } from "node:string_decoder";
 import type { Command } from "commander";
 import { createContext } from "../core/context.js";
 import { UsageError, ExitCode } from "../core/errors.js";
@@ -34,6 +36,8 @@ export class StreamMasker {
   private remainder = "";
   private readonly keepLen: number;
   private readonly sortedSecrets: string[];
+  // Keeps a character split across two chunks whole.
+  private readonly decoder = new StringDecoder("utf8");
 
   constructor(sortedSecrets: string[]) {
     this.sortedSecrets = sortedSecrets.filter((s) => Boolean(s));
@@ -45,7 +49,7 @@ export class StreamMasker {
   }
 
   process(chunk: Buffer | string): string {
-    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    const text = typeof chunk === "string" ? chunk : this.decoder.write(chunk);
     const full = this.remainder + text;
     const masked = maskSecrets(full, this.sortedSecrets);
     if (this.keepLen === 0) {
@@ -63,10 +67,20 @@ export class StreamMasker {
   }
 
   flush(): string {
-    const rem = this.remainder;
+    const rem = this.remainder + this.decoder.end();
     this.remainder = "";
     return rem ? maskSecrets(rem, this.sortedSecrets) : "";
   }
+}
+
+/** The shell's exit code for a child: its own code, or 128 plus the signal that killed it. */
+export function childExitCode(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): number {
+  if (code !== null) return code;
+  const number = signal ? constants.signals[signal] : undefined;
+  return number ? 128 + number : 1;
 }
 
 export interface TermixCredentialRaw {
@@ -324,15 +338,7 @@ export function registerInjectCommands(program: Command): void {
               if (remErr) process.stderr.write(remErr);
             }
 
-            if (code !== null) {
-              process.exit(code);
-            } else if (signal === "SIGINT") {
-              process.exit(130);
-            } else if (signal === "SIGTERM") {
-              process.exit(143);
-            } else {
-              process.exit(ExitCode.OK);
-            }
+            process.exit(childExitCode(code, signal));
           },
         );
 

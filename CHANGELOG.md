@@ -18,7 +18,7 @@
 
 ### Added
 
-- `termix inject` fetches credentials from Termix and injects them into a local command in memory without touching disk, with optional live stream masking (`--mask`) and named variable injection (`--names`)
+- `termix inject <ids...> -- <command>` runs a command with credentials in its environment, never written to disk. `--mask` hides them in the output, `--names` adds variables named after the credential
 - `termix ops` (or `termix actions`) lists, describes and runs the actions plugins offer, on one host or many, with dry runs, run history, approvals and cancel
 - `termix api-keys create --scope` makes a key limited to actions
 - Exit code 9 when an action waits for approval, and 10 when it worked on some hosts and failed on others
