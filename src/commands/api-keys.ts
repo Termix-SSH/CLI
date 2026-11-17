@@ -53,16 +53,31 @@ export function registerApiKeyCommands(program: Command): void {
     )
     .requiredOption("--name <name>", "Human-readable name for the key")
     .requiredOption("--user <userId>", "Id of the user the key acts as")
-    .option("--expires-at <date>", "Expiry as an ISO date; omit for no expiry")
+    .option(
+      "--expires-at <date>",
+      "Expiry as an ISO date. Omit for the server's default (90 days on Termix 26.11.2+)",
+    )
+    .option("--never-expires", "Make a key that never expires")
     .option(
       "--scope <scope>",
-      "Limit the key to actions: actions-read or actions-run. Omit for full access",
+      "What the key may do: read, actions-read, actions-run or full. Omit for the server's default (read only on Termix 26.11.2+)",
     )
     .action(async function (
       this: Command,
-      opts: { name: string; user: string; expiresAt?: string; scope?: string },
+      opts: {
+        name: string;
+        user: string;
+        expiresAt?: string;
+        neverExpires?: boolean;
+        scope?: string;
+      },
     ) {
       await run(async () => {
+        if (opts.expiresAt && opts.neverExpires) {
+          throw new UsageError(
+            "Use --expires-at or --never-expires, not both.",
+          );
+        }
         if (opts.expiresAt && Number.isNaN(Date.parse(opts.expiresAt))) {
           throw new UsageError(
             `Invalid --expires-at: "${opts.expiresAt}" (expected an ISO date).`,
@@ -78,6 +93,7 @@ export function registerApiKeyCommands(program: Command): void {
             name: opts.name,
             userId: opts.user,
             ...(opts.expiresAt ? { expiresAt: opts.expiresAt } : {}),
+            ...(opts.neverExpires ? { expiresAt: null } : {}),
             ...(scopes ? { scopes } : {}),
           },
         });
@@ -116,6 +132,8 @@ export function registerApiKeyCommands(program: Command): void {
 /** The scope name the server stores, from the short form the CLI takes. */
 export function scopeOf(value: string): string {
   const scopes: Record<string, string> = {
+    read: "read",
+    full: "full",
     "actions-read": "operations:read",
     "actions-run": "operations:run",
     "operations:read": "operations:read",
@@ -124,7 +142,7 @@ export function scopeOf(value: string): string {
   const scope = scopes[value];
   if (!scope) {
     throw new UsageError(
-      `Invalid --scope "${value}" (expected actions-read or actions-run).`,
+      `Invalid --scope "${value}" (expected read, actions-read, actions-run or full).`,
     );
   }
   return scope;

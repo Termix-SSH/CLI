@@ -47,6 +47,7 @@ async function withDockerSession<T>(
     if (error instanceof TermixApiError && error.code === "DOCKER_DISABLED") {
       throw new Error(
         `Docker is turned off for host ${hostId}. Turn it on in the host's Docker settings.`,
+        { cause: error },
       );
     }
     throw error;

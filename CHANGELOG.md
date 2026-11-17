@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.1
+
+### Added
+
+- The binaries on each release carry signed build provenance you can check with `gh attestation verify`
+- `api-keys create` takes `--scope read` or `--scope full` and `--never-expires`. Termix 26.11.2 makes a new key read only for 90 days unless you ask for more
+- `users list --status active|disabled|pending`, `users disable <id>` and `users enable <id>` to turn accounts off, on, or approve them (Termix 26.11.2)
+- `users invites list|create|revoke` for invite links (Termix 26.11.2)
+- `access-review` lists every host, folder and credential share, with `--kind`, `--user`, `--role` and `--csv` (Termix 26.11.2)
+
+### Fixed
+
+- Updated zod to fix a security advisory
+
 ## 1.3.0
 
 ### Added

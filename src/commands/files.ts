@@ -177,6 +177,7 @@ class SftpSession {
       if (toTrash && error instanceof TermixApiError && error.status === 409) {
         throw new Error(
           `Could not move ${remotePath} to the trash (${error.message}), so it was not deleted. Run without --trash to delete it for good.`,
+          { cause: error },
         );
       }
       throw error;
