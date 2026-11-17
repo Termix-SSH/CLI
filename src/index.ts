@@ -22,9 +22,9 @@ import { registerMiscCommands } from "./commands/misc.js";
 import { registerPluginCommands } from "./commands/plugins.js";
 import { registerApiCommands } from "./commands/api.js";
 import { registerOpsCommands } from "./commands/ops.js";
+import { registerInjectCommands } from "./commands/inject.js";
 
 const program = new Command();
-
 program
   .name("termix")
   .description(
@@ -64,6 +64,7 @@ registerMiscCommands(program);
 registerPluginCommands(program);
 registerOpsCommands(program);
 registerApiCommands(program);
+registerInjectCommands(program);
 
 // Commander exits the process itself; take it over so every path leaves
 // through our exit-code taxonomy instead of commander's 0/1.
