@@ -1,7 +1,13 @@
 import type { Command } from "commander";
 import { createContext } from "../core/context.js";
 import { UsageError } from "../core/errors.js";
-import { printList, run, type Column } from "../core/output/index.js";
+import {
+  printList,
+  printRecord,
+  printResult,
+  run,
+  type Column,
+} from "../core/output/index.js";
 
 type Row = Record<string, unknown>;
 
@@ -21,7 +27,38 @@ const USER_COLUMNS: Column<Row>[] = [
   { header: "oidc", value: (u) => u.is_oidc ?? u.isOidc },
   { header: "totp", value: (u) => u.totp_enabled ?? u.totpEnabled },
   { header: "unlocked", value: (u) => u.data_unlocked },
+  { header: "state", value: (u) => userState(u) },
 ];
+
+const INVITE_COLUMNS: Column<Row>[] = [
+  { header: "id", value: (r) => r.id },
+  { header: "note", value: (r) => r.note },
+  { header: "state", value: (r) => r.state },
+  { header: "uses", value: (r) => `${r.uses}/${r.maxUses}` },
+  { header: "admin", value: (r) => r.makeAdmin },
+  { header: "expires", value: (r) => r.expiresAt },
+];
+
+const ACCESS_COLUMNS: Column<Row>[] = [
+  { header: "kind", value: (r) => r.kind },
+  { header: "target", value: (r) => r.targetName },
+  {
+    header: "to",
+    value: (r) => r.granteeUsername ?? `role:${r.granteeRoleName}`,
+  },
+  { header: "level", value: (r) => r.permissionLevel },
+  { header: "owner", value: (r) => r.ownerUsername },
+  { header: "by", value: (r) => r.grantedByUsername },
+  { header: "expires", value: (r) => r.expiresAt },
+];
+
+const USER_STATES = ["active", "disabled", "pending"];
+const ACCESS_KINDS = ["host", "folder", "credential"];
+
+export function userState(u: Row): string {
+  if (!u.disabled) return "active";
+  return u.disabled_reason === "pending_approval" ? "pending" : "disabled";
+}
 
 /**
  * Admin and audit commands. These endpoints are gated server-side, so a
@@ -61,18 +98,173 @@ export function registerAdminCommands(program: Command): void {
   users
     .command("list", { isDefault: true })
     .description("List user accounts (admin only).")
-    .action(async function (this: Command) {
+    .option("--status <state>", "Only active, disabled or pending accounts")
+    .action(async function (this: Command, opts: { status?: string }) {
       await run(async () => {
+        if (opts.status && !USER_STATES.includes(opts.status)) {
+          throw new UsageError(
+            `Invalid --status: "${opts.status}" (expected ${USER_STATES.join(", ")}).`,
+          );
+        }
         const { client } = await createContext(this);
         const data = await client.request<Row[] | { users?: Row[] }>({
           method: "GET",
           path: "/users/list",
+          params: opts.status ? { status: opts.status } : undefined,
         });
         printList(toRows(data, "users"), USER_COLUMNS, {
           quietField: "userId",
         });
       });
     });
+
+  users
+    .command("disable <userId>")
+    .description(
+      "Turn an account off: sign it out everywhere and block its logins and API keys.",
+    )
+    .action(async function (this: Command, userId: string) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        await client.request({
+          method: "POST",
+          path: `/users/admin/${encodeURIComponent(userId)}/disable`,
+        });
+        printResult(`Turned off ${userId}`, { id: userId });
+      });
+    });
+
+  users
+    .command("enable <userId>")
+    .description(
+      "Turn an account back on, or approve one waiting for approval.",
+    )
+    .action(async function (this: Command, userId: string) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        await client.request({
+          method: "POST",
+          path: `/users/admin/${encodeURIComponent(userId)}/enable`,
+        });
+        printResult(`Turned on ${userId}`, { id: userId });
+      });
+    });
+
+  const invites = users
+    .command("invites")
+    .description("Invite links that let someone make an account.");
+
+  invites
+    .command("list", { isDefault: true })
+    .description("List invite links.")
+    .action(async function (this: Command) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        const data = await client.request<{ invites?: Row[] }>({
+          method: "GET",
+          path: "/users/invites",
+        });
+        printList(toRows(data, "invites"), INVITE_COLUMNS, {
+          quietField: "id",
+        });
+      });
+    });
+
+  invites
+    .command("create")
+    .description("Make an invite link. The token is shown only once.")
+    .option("--note <text>", "Who the link is for")
+    .option("--role <roleId>", "Role id the new account gets", collect, [])
+    .option("--uses <n>", "How many accounts the link can make", "1")
+    .option("--hours <n>", "Hours until the link ends", "72")
+    .option("--admin", "Make the new account an admin")
+    .action(async function (
+      this: Command,
+      opts: {
+        note?: string;
+        role: string[];
+        uses: string;
+        hours: string;
+        admin?: boolean;
+      },
+    ) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        const created = await client.request<Row>({
+          method: "POST",
+          path: "/users/invites",
+          data: {
+            note: opts.note,
+            roleIds: opts.role.map((id) => parsePositive(id, "--role")),
+            maxUses: parsePositive(opts.uses, "--uses"),
+            expiresInHours: parsePositive(opts.hours, "--hours"),
+            makeAdmin: !!opts.admin,
+          },
+        });
+        printRecord(created, { quietField: "token" });
+      });
+    });
+
+  invites
+    .command("revoke <id>")
+    .description("Revoke an invite link.")
+    .action(async function (this: Command, id: string) {
+      await run(async () => {
+        const { client } = await createContext(this);
+        await client.request({
+          method: "DELETE",
+          path: `/users/invites/${encodeURIComponent(id)}`,
+        });
+        printResult(`Revoked invite ${id}`, { id });
+      });
+    });
+
+  program
+    .command("access-review")
+    .description("List every host, folder and credential share (admin only).")
+    .option("--kind <kind>", "Only host, folder or credential shares")
+    .option("--user <userId>", "Shares this user has or owns")
+    .option("--role <roleId>", "Shares given to this role")
+    .option("--csv", "Print the whole list as CSV")
+    .action(async function (
+      this: Command,
+      opts: { kind?: string; user?: string; role?: string; csv?: boolean },
+    ) {
+      await run(async () => {
+        if (opts.kind && !ACCESS_KINDS.includes(opts.kind)) {
+          throw new UsageError(
+            `Invalid --kind: "${opts.kind}" (expected ${ACCESS_KINDS.join(", ")}).`,
+          );
+        }
+        const { client } = await createContext(this);
+        const params: Record<string, unknown> = { limit: 500 };
+        if (opts.kind) params.kind = opts.kind;
+        if (opts.user) params.userId = opts.user;
+        if (opts.role) params.roleId = parsePositive(opts.role, "--role");
+        if (opts.csv) {
+          const text = await client.request<string>({
+            method: "GET",
+            path: "/rbac/access-review",
+            params: { ...params, format: "csv" },
+            responseType: "text",
+          });
+          process.stdout.write(`${String(text)}\n`);
+          return;
+        }
+        const data = await client.request<{ shares?: Row[] }>({
+          method: "GET",
+          path: "/rbac/access-review",
+          params,
+        });
+        printList(toRows(data, "shares"), ACCESS_COLUMNS, {
+          quietField: "accessId",
+        });
+      });
+    });
+}
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 /** Accept either a bare array or an envelope like `{ logs: [...] }`. */

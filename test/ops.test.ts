@@ -38,6 +38,8 @@ describe("api key scopes", () => {
     const { scopeOf } = await import("../src/commands/api-keys.js");
     expect(scopeOf("actions-read")).toBe("operations:read");
     expect(scopeOf("actions-run")).toBe("operations:run");
+    expect(scopeOf("read")).toBe("read");
+    expect(scopeOf("full")).toBe("full");
     expect(() => scopeOf("all")).toThrow(/actions-read/);
   });
 });

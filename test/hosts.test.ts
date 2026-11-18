@@ -192,4 +192,14 @@ describe("hosts help", () => {
     expect(help).toMatch(/password \| key \| credential \| agent \| none/);
     expect(help).toMatch(/--no-credential/);
   });
+
+  it("allows global options after subcommands (e.g. hosts list --json)", async () => {
+    request.mockResolvedValueOnce([]);
+    const program = new Command()
+      .option("--json", "force json output")
+      .exitOverride();
+    registerHostCommands(program);
+    await program.parseAsync(["hosts", "list", "--json"], { from: "user" });
+    expect(program.opts().json).toBe(true);
+  });
 });

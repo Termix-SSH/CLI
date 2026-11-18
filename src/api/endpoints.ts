@@ -65,6 +65,24 @@ export const ENDPOINTS: EndpointRef[] = [
   // Administration
   { method: "get", path: "/audit-logs", usedBy: "audit-logs" },
   { method: "get", path: "/users/list", usedBy: "users list" },
+  {
+    method: "post",
+    path: "/users/admin/{userId}/disable",
+    usedBy: "users disable",
+  },
+  {
+    method: "post",
+    path: "/users/admin/{userId}/enable",
+    usedBy: "users enable",
+  },
+  { method: "get", path: "/users/invites", usedBy: "users invites list" },
+  { method: "post", path: "/users/invites", usedBy: "users invites create" },
+  {
+    method: "delete",
+    path: "/users/invites/{id}",
+    usedBy: "users invites revoke",
+  },
+  { method: "get", path: "/rbac/access-review", usedBy: "access-review" },
   { method: "post", path: "/users/api-keys", usedBy: "api-keys create" },
   { method: "get", path: "/users/api-keys", usedBy: "api-keys list" },
   {

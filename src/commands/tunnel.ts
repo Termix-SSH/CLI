@@ -226,6 +226,7 @@ async function saveConnections(
     if (error instanceof TermixApiError && error.status === 404) {
       throw new Error(
         "This server's Tunnels plugin is older than 1.2.0, so tunnels can't be changed from the CLI. Update the plugin.",
+        { cause: error },
       );
     }
     throw error;
