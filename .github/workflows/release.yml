@@ -278,6 +278,7 @@ jobs:
       - run: npm ci --ignore-scripts
 
       - name: Build the standalone binary
+        shell: bash
         env:
           ASSET: ${{ matrix.asset }}
         run: npm run build:binary -- "$ASSET"
