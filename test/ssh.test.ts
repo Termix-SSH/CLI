@@ -5,7 +5,7 @@ vi.mock("../src/core/prompt.js", async (importOriginal) => ({
   promptHidden: vi.fn(async () => "secret"),
 }));
 
-import { completeAuth, decideHostKey } from "../src/commands/ssh.js";
+import { completeAuth, decideHostKey, EXIT_LINE } from "../src/commands/ssh.js";
 import type { TerminalSocket } from "../src/terminal/ws-client.js";
 
 describe("decideHostKey", () => {
@@ -55,5 +55,11 @@ describe("completeAuth", () => {
       ...connect,
       password: "secret",
     });
+  });
+});
+
+describe("EXIT_LINE", () => {
+  it("ends with CR, which PowerShell takes as Enter (#31)", () => {
+    expect(EXIT_LINE).toBe("exit\r");
   });
 });

@@ -37,6 +37,12 @@ function toHostConfig(id: number, host: HostRecord): HostConfig {
   };
 }
 
+/**
+ * Typed after a --command finishes. CR is Enter everywhere, while PowerShell
+ * on Windows takes a bare LF as a continuation line and never exits.
+ */
+export const EXIT_LINE = "exit\r";
+
 export function registerSshCommands(program: Command): void {
   program
     .command("ssh <hostId>")
@@ -281,7 +287,7 @@ async function runSession(
     const scheduleExit = (): void => {
       if (opts.interactive || !opts.command) return;
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => socket.input("exit\n"), 1500);
+      idleTimer = setTimeout(() => socket.input(EXIT_LINE), 1500);
       idleTimer.unref?.();
     };
 
