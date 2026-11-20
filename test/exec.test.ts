@@ -60,7 +60,8 @@ describe("parseExecOutput", () => {
 });
 
 describe("reportsExitCode", () => {
-  it("sends the command as is from Snippets 1.5.0, so Windows shells work (#32)", () => {
+  it("sends the command as is from Snippets 1.4.1, so Windows shells work (#32)", () => {
+    expect(reportsExitCode("1.4.1")).toBe(true);
     expect(reportsExitCode("1.5.0")).toBe(true);
     expect(reportsExitCode("1.6.0-beta.1")).toBe(true);
     expect(reportsExitCode("2.0.0")).toBe(true);

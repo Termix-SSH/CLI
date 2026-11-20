@@ -12,7 +12,7 @@ const EXIT_MARKER = "__TERMIX_EXIT=";
 
 export interface SnippetExecuteResponse {
   success: boolean;
-  /** Sent by the Snippets plugin from 1.5.0. */
+  /** Sent by the Snippets plugin from 1.4.1. */
   exitCode?: number | null;
   output?: string;
   error?: string;
@@ -28,15 +28,17 @@ export function wrapCommand(command: string): string {
 }
 
 /**
- * Snippets 1.5.0 returns the exit code itself, so the command can go as is.
+ * Snippets 1.4.1 returns the exit code itself, so the command can go as is.
  * That is the only way it runs on hosts whose shell isn't POSIX, like
  * PowerShell on Windows.
  */
 export function reportsExitCode(version: string | undefined): boolean {
-  const [major = 0, minor = 0] = (version ?? "")
+  const [major = 0, minor = 0, patch = 0] = (version ?? "")
     .split(/[.-]/)
     .map((part) => Number(part) || 0);
-  return major > 1 || (major === 1 && minor >= 5);
+  return (
+    major > 1 || (major === 1 && (minor > 4 || (minor === 4 && patch >= 1)))
+  );
 }
 
 /** Matches the trailing marker; built from EXIT_MARKER so they cannot diverge. */

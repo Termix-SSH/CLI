@@ -5,7 +5,7 @@
 ### Fixed
 
 - `ssh --command` exits after the command on Windows hosts instead of hanging in PowerShell
-- `exec` works on Windows hosts and other shells that are not POSIX, with Snippets 1.5.0 or later on the server
+- `exec` works on Windows hosts and other shells that are not POSIX, with Snippets 1.4.1 or later on the server
 
 ## 1.3.1
 
