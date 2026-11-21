@@ -5,12 +5,15 @@ import type { TermixClient } from "../core/http.js";
 import { ExitCode } from "../core/errors.js";
 import { fail } from "../core/output/index.js";
 import { parseId } from "./hosts.js";
-import { pluginPath } from "../api/features.js";
+import { FEATURES, pluginPath } from "../api/features.js";
+import { getServerPlugins } from "../core/plugins.js";
 
 const EXIT_MARKER = "__TERMIX_EXIT=";
 
 export interface SnippetExecuteResponse {
   success: boolean;
+  /** Sent by the Snippets plugin from 1.4.1. */
+  exitCode?: number | null;
   output?: string;
   error?: string;
 }
@@ -22,6 +25,20 @@ export interface SnippetExecuteResponse {
  */
 export function wrapCommand(command: string): string {
   return `(\n${command}\n)\nprintf '\\n${EXIT_MARKER}%d\\n' "$?"`;
+}
+
+/**
+ * Snippets 1.4.1 returns the exit code itself, so the command can go as is.
+ * That is the only way it runs on hosts whose shell isn't POSIX, like
+ * PowerShell on Windows.
+ */
+export function reportsExitCode(version: string | undefined): boolean {
+  const [major = 0, minor = 0, patch = 0] = (version ?? "")
+    .split(/[.-]/)
+    .map((part) => Number(part) || 0);
+  return (
+    major > 1 || (major === 1 && (minor > 4 || (minor === 4 && patch >= 1)))
+  );
 }
 
 /** Matches the trailing marker; built from EXIT_MARKER so they cannot diverge. */
@@ -115,15 +132,25 @@ export function registerExecCommands(program: Command): void {
         const command = commandParts.join(" ");
         const { client, requireFeature } = await createContext(this);
         await requireFeature("snippets");
+        const snippets = (await getServerPlugins(client)).find(
+          (plugin) => plugin.id === FEATURES.snippets.pluginId,
+        );
+        const direct = reportsExitCode(snippets?.version);
 
         const result = await executeOnHost(
           client,
           hostId,
-          wrapCommand(command),
+          direct ? command : wrapCommand(command),
           `cli-exec-${randomUUID()}`,
         );
 
-        const { output, exitCode } = parseExecOutput(result.output ?? "");
+        const { output, exitCode } = direct
+          ? {
+              output: result.output ?? "",
+              exitCode:
+                typeof result.exitCode === "number" ? result.exitCode : null,
+            }
+          : parseExecOutput(result.output ?? "");
         if (output) process.stdout.write(output);
         if (result.error) process.stderr.write(result.error);
 
